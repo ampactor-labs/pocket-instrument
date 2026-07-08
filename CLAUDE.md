@@ -15,14 +15,16 @@ The whole product lives or dies in the **first 30 seconds cold.** That loop is t
 
 ## Repository status
 
-Greenfield. As of 2026-07-08 the repo holds the design source of truth and the decisions log, no code yet. The directory name `pocket-instrument` is a placeholder; the real name is the builder's to pick (see `DECISIONS.md` → Still open).
+A working prototype now lives at the repo root: a Vite + Tone.js + vanilla DOM/CSS app, phone-first, run with `npm run dev -- --host`. Working today: Session and Arrangement views, four clip editors (chords, drum rack, two piano rolls), a mixer, global key/scale, one-tap transforms, undo/redo, and per-clip launch modes. `ROADMAP.md` tracks what's next and the performance work. The directory name `pocket-instrument` is a placeholder; the real name is the builder's to pick (see `DECISIONS.md` → Still open).
 
-The first milestone (`HANDOFF.md` §7) is the **cold-open harmony playground**: function-colored chord blocks you place and connect, common tones lighting up on connection, a fluid tactile touch feel, real audio. Nothing past that ships until it clears the three success criteria in §7. The point is to prove *feel* before building rhythm, melody, or the learning layer.
+The build intentionally took the literal mobile-Ableton road (clip grid, launch-and-loop, direct drag), a pivot the builder chose over the original fractal "cold-open harmony playground" milestone in `HANDOFF.md` §7. Read `AGENTS.md` + `ROADMAP.md` for what the app is today; read `HANDOFF.md` + `DECISIONS.md` for the north star and the reasoning, which still hold (the instrument is the lesson; learning is pull; can't-make-it-wrong). Where surface detail disagrees, the code and `AGENTS.md` win; on *why*, `HANDOFF.md` wins.
 
 ## Canonical docs — read order
 
 - **`HANDOFF.md`** — the source of truth. The full brief: who it's for, the north star, the seven design principles, the three playgrounds (harmony/rhythm/melody), the learning layer, the research agenda, the technical forks, the first milestone. Read it whole before proposing anything. It is preserved verbatim as the builder wrote it; don't edit its prose to satisfy a linter.
 - **`DECISIONS.md`** — the forks, with reasoning. What's settled (so you don't re-litigate) and what's still open (so you know what needs the builder's call). Every entry records *why*, so it's overturnable, not gospel. Append here whenever a load-bearing fork gets decided.
+- **`AGENTS.md`** — the current built app: the four-file architecture, how to run and verify it, the working conventions. Written during the mobile-Ableton build, so it's the doc closest to the code.
+- **`ROADMAP.md`** — what works now, what's agreed next, and the on-device performance findings.
 
 ## The invariants easiest to violate
 
@@ -60,7 +62,12 @@ From `HANDOFF.md` §8:
 
 ## Commands
 
-No toolchain yet; the repo is docs-only. When v0 scaffolds (Vite + Web Audio per the decision above), this section gets the dev, build, and test commands. Until then there's nothing to run.
+Run from the repo root (the app moved up out of `prototype/`, so an old shell sitting in that folder will fail — `cd` back to the root first):
+
+- `npm install` — install dependencies (first run only).
+- `npm run dev -- --host` — Vite dev server; open the printed Network URL on a phone.
+- `npm run build && npm run preview -- --host` — production build and preview; judge on-device performance here, never on the dev server.
+- `npm run smoke` — headless-Chrome smoke test (`puppeteer-core` + a Chrome binary); drives the core flow and asserts the transport actually advances, not just that the play button lights up.
 
 ## A note on naming
 
