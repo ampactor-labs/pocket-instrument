@@ -3,7 +3,7 @@
 // velocity, and a transport that loops a Scene or plays the Arrangement.
 
 import * as Tone from "tone";
-import { CHORDS, DRUM_VOICES, voiceLead, clipAt, arrangeLength } from "./model.js";
+import { CHORDS, DRUM_VOICES, voiceLead, clipAt, arrangeLength, clipLaunch, clipLengthBars } from "./model.js";
 
 const midiToFreq = (m) => Tone.Frequency(m, "midi").toFrequency();
 const sixteenth = () => Tone.Time("16n").toSeconds();
@@ -154,7 +154,7 @@ export function createAudio(song) {
   let mode = "scene";
   let focusIndex = 0;
   let curScene = 0;
-  let localStep = 0;
+  const trackState = Object.fromEntries(TRACK_KEYS.map((track) => [track, { scene: 0, step: 0, active: true }]));
   let arrStep = 0;
   let visualCb = () => {};
 
@@ -199,29 +199,97 @@ export function createAudio(song) {
     }
   }
 
+  function activeScenes() {
+    return Object.fromEntries(TRACK_KEYS.map((track) => [track, trackState[track].active ? trackState[track].scene : -1]));
+  }
+
+  function resetTrack(track, sceneIndex) {
+    trackState[track] = { scene: sceneIndex, step: 0, active: !!song.scenes[sceneIndex] };
+  }
+
+  function targetScene(sceneIndex, follow) {
+    const count = song.scenes.length;
+    if (count <= 0) return -1;
+    if (follow === "next") return (sceneIndex + 1) % count;
+    if (follow === "prev") return (sceneIndex - 1 + count) % count;
+    if (follow === "random") {
+      if (count === 1) return sceneIndex;
+      let next = sceneIndex;
+      while (next === sceneIndex) next = Math.floor(Math.random() * count);
+      return next;
+    }
+    return -1;
+  }
+
+  function advanceSceneTrack(track) {
+    const st = trackState[track];
+    if (!st.active) return;
+    const scene = song.scenes[st.scene];
+    if (!scene) {
+      st.active = false;
+      return;
+    }
+    const launch = clipLaunch(scene, track);
+    const naturalBars = clipLengthBars(scene, track);
+    const limitBars = launch.follow !== "none" ? launch.followBars : naturalBars;
+    st.step += 1;
+    if (st.step < limitBars * 16) return;
+    const nextScene = targetScene(st.scene, launch.follow);
+    if (nextScene >= 0) {
+      resetTrack(track, nextScene);
+      return;
+    }
+    if (launch.mode === "oneshot") {
+      st.step = 0;
+      st.active = false;
+    } else {
+      st.step = 0;
+    }
+  }
+
   const clock = new Tone.Loop((time) => {
     if (mode === "arrangement") return tickArrangement(time);
-    const scene = song.scenes[curScene];
-    if (!scene) return;
-    const bars = scene.harmony.length;
-    const stepInBar = localStep % 16;
-    const bar = Math.floor(localStep / 16);
-    if (stepInBar === 0) {
-      const ci = scene.harmony[bar];
-      playChord(ci, time);
-      Tone.Draw.schedule(() => visualCb({ type: "chord", scene: curScene, bar, chord: ci }), time);
-    }
-    for (const v of DRUM_VOICES) {
-      if (scene.drums[v][stepInBar]) {
-        hitDrum(v, time);
-        Tone.Draw.schedule(() => visualCb({ type: "hit", voice: v, step: stepInBar }), time);
+    const activeBefore = activeScenes();
+    const harmonyState = trackState.harmony;
+    const harmonyScene = harmonyState.active ? song.scenes[harmonyState.scene] : null;
+    let visualStep = 0;
+    let visualBar = 0;
+    if (harmonyScene) {
+      const stepInBar = harmonyState.step % 16;
+      const bar = Math.floor(harmonyState.step / 16) % harmonyScene.harmony.length;
+      visualStep = stepInBar;
+      visualBar = bar;
+      if (stepInBar === 0) {
+        const ci = harmonyScene.harmony[bar];
+        playChord(ci, time);
+        Tone.Draw.schedule(() => visualCb({ type: "chord", scene: harmonyState.scene, bar, chord: ci, activeScenes: activeBefore }), time);
       }
     }
-    if (scene.melody[stepInBar]) playLead(scene.melody[stepInBar], time);
-    if (scene.bass[stepInBar]) playBass(scene.bass[stepInBar], time);
-    Tone.Draw.schedule(() => visualCb({ type: "step", scene: curScene, localStep, stepInBar, bar }), time);
-    localStep += 1;
-    if (localStep >= bars * 16) localStep = 0;
+
+    const drumState = trackState.drums;
+    const drumScene = drumState.active ? song.scenes[drumState.scene] : null;
+    if (drumScene) {
+      const stepInBar = drumState.step % 16;
+      for (const v of DRUM_VOICES) {
+        if (drumScene.drums[v][stepInBar]) {
+          hitDrum(v, time);
+          Tone.Draw.schedule(() => visualCb({ type: "hit", scene: drumState.scene, voice: v, step: stepInBar, activeScenes: activeBefore }), time);
+        }
+      }
+    }
+
+    for (const track of ["bass", "melody"]) {
+      const st = trackState[track];
+      const scene = st.active ? song.scenes[st.scene] : null;
+      if (!scene) continue;
+      const stepInBar = st.step % 16;
+      const n = scene[track][stepInBar];
+      if (n) (track === "bass" ? playBass : playLead)(n, time);
+    }
+
+    for (const track of TRACK_KEYS) advanceSceneTrack(track);
+    const activeAfter = activeScenes();
+    Tone.Draw.schedule(() => visualCb({ type: "step", scene: curScene, localStep: visualBar * 16 + visualStep, stepInBar: visualStep, bar: visualBar, activeScenes: activeAfter }), time);
   }, "16n");
 
   let playing = false;
@@ -255,7 +323,17 @@ export function createAudio(song) {
       mode = "scene";
       focusIndex = index;
       curScene = index;
-      localStep = 0;
+      for (const track of TRACK_KEYS) resetTrack(track, index);
+      Tone.Draw.schedule(() => visualCb({ type: "step", scene: index, localStep: 0, stepInBar: 0, bar: 0, activeScenes: activeScenes() }), Tone.now());
+      if (!playing) this.play();
+    },
+    launchClip(index, track) {
+      mode = "scene";
+      focusIndex = index;
+      curScene = index;
+      if (!playing) for (const key of TRACK_KEYS) trackState[key].active = false;
+      resetTrack(track, index);
+      Tone.Draw.schedule(() => visualCb({ type: "step", scene: index, localStep: 0, stepInBar: 0, bar: 0, activeScenes: activeScenes() }), Tone.now());
       if (!playing) this.play();
     },
     playArrangement(fromBar = 0) {
@@ -277,7 +355,7 @@ export function createAudio(song) {
       focusIndex = index;
       if (m === "scene") {
         curScene = index;
-        localStep = 0;
+        for (const track of TRACK_KEYS) resetTrack(track, index);
       }
     },
     setTempo(bpm) {

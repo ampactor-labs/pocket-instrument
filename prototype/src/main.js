@@ -8,7 +8,9 @@ import {
   DRUM_META,
   ARRANGE_TRACKS,
   SCALE_NAMES,
+  FOLLOW_ACTIONS,
   chordColor,
+  clipLaunch,
   hslInt,
   makeSong,
   cloneScene,
@@ -63,6 +65,7 @@ async function ensureStarted() {
 }
 
 let playingScene = -1;
+const playingTracks = Object.fromEntries(TRACKS.map((t) => [t.key, -1]));
 const sceneEls = []; // per scene: { row, clips: {track: el} }
 
 let view = "session"; // 'session' | 'arrangement'
@@ -276,6 +279,49 @@ function clipContent(scene, track) {
   return null;
 }
 
+function launchBadge(scene, track) {
+  const launch = clipLaunch(scene, track);
+  const bits = [];
+  if (launch.mode === "oneshot") bits.push("1x");
+  if (launch.follow === "next") bits.push("next");
+  else if (launch.follow === "prev") bits.push("prev");
+  else if (launch.follow === "random") bits.push("rnd");
+  return bits.length ? el("div", { class: "clip-badge", text: bits.join(" ") }) : null;
+}
+
+function bindSessionClip(clip, sceneIndex, track, filled) {
+  if (!filled) return;
+  let timer = 0;
+  let longPress = false;
+  let startX = 0;
+  let startY = 0;
+  const clear = () => {
+    clearTimeout(timer);
+    timer = 0;
+    clip.classList.remove("pressing");
+  };
+  clip.addEventListener("pointerdown", (e) => {
+    longPress = false;
+    startX = e.clientX;
+    startY = e.clientY;
+    clip.classList.add("pressing");
+    timer = window.setTimeout(() => {
+      longPress = true;
+      clear();
+      openClipProps(sceneIndex, track);
+    }, 520);
+  });
+  clip.addEventListener("pointermove", (e) => {
+    if (Math.hypot(e.clientX - startX, e.clientY - startY) > 12) clear();
+  });
+  clip.addEventListener("pointerup", () => {
+    const wasLong = longPress;
+    clear();
+    if (!wasLong) openEditor(sceneIndex, track);
+  });
+  clip.addEventListener("pointercancel", clear);
+}
+
 function renderSession() {
   sessionEl.innerHTML = "";
   sceneEls.length = 0;
@@ -304,16 +350,18 @@ function renderSession() {
       const clip = el("div", {
         class: `clip ${filled ? "filled" : "empty"}`,
         style: `--tc:${t.color}`,
-        onclick: () => {
-          if (filled) openEditor(i, t.key);
-        },
+        "data-scene": String(i),
+        "data-track": t.key,
       });
       if (filled) {
         clip.appendChild(el("div", { class: "tri", text: "▶" }));
         clip.appendChild(content);
+        const badge = launchBadge(scene, t.key);
+        if (badge) clip.appendChild(badge);
       } else {
         clip.textContent = "＋";
       }
+      bindSessionClip(clip, i, t.key, filled);
       refs.clips[t.key] = clip;
       grid.appendChild(clip);
     }
@@ -325,15 +373,22 @@ function renderSession() {
 
 function setPlaying(i) {
   playingScene = i;
+  for (const t of TRACKS) playingTracks[t.key] = i;
+  applyPlaying();
+}
+function setActiveTracks(activeScenes) {
+  for (const t of TRACKS) playingTracks[t.key] = activeScenes[t.key] ?? -1;
+  const first = playingTracks[TRACKS[0].key];
+  playingScene = first >= 0 && TRACKS.every((t) => playingTracks[t.key] === first) ? first : -1;
   applyPlaying();
 }
 function applyPlaying() {
   sceneEls.forEach((r, i) => {
-    const on = i === playingScene;
-    r.row.classList.toggle("playing", on);
+    const rowOn = i === playingScene;
+    r.row.classList.toggle("playing", rowOn);
     for (const t of TRACKS) {
       const c = r.clips[t.key];
-      if (c && c.classList.contains("filled")) c.classList.toggle("playing", on);
+      if (c && c.classList.contains("filled")) c.classList.toggle("playing", playingTracks[t.key] === i);
     }
   });
 }
@@ -377,6 +432,105 @@ function closeEditor() {
   mixerRAF = 0;
   scrim.classList.remove("open");
   sheet.classList.remove("open");
+}
+
+function choice(label, on, onclick, attrs = {}) {
+  return el("div", { class: "choice" + (on ? " on" : ""), text: label, onclick, ...attrs });
+}
+
+function openClipProps(sceneIndex, track) {
+  editor = null;
+  cancelAnimationFrame(mixerRAF);
+  mixerRAF = 0;
+  const scene = song.scenes[sceneIndex];
+  const launch = clipLaunch(scene, track);
+  const meta = TRACKS.find((t) => t.key === track);
+  sheet.innerHTML = "";
+  sheet.style.setProperty("--tc", meta.color);
+
+  const setLaunch = (patch) => {
+    const changed = Object.entries(patch).some(([k, v]) => launch[k] !== v);
+    if (!changed) return;
+    pushUndo();
+    Object.assign(launch, patch);
+    refreshClip(sceneIndex, track);
+    openClipProps(sceneIndex, track);
+  };
+
+  sheet.appendChild(
+    el("div", { class: "sheet-bar" }, [
+      el("div", { class: "swatch" }),
+      el("div", { class: "title", text: "Clip Properties" }),
+      el("div", { class: "sub", text: `${meta.name} · Scene ${scene.tag}` }),
+      el("div", { class: "close", text: "Done", onclick: closeEditor }),
+    ])
+  );
+
+  sheet.appendChild(
+    el("div", { class: "propsection" }, [
+      el("div", { class: "proplabel", text: "launch mode" }),
+      el("div", { class: "choicegrid two" }, [
+        choice("Loop", launch.mode === "loop", () => setLaunch({ mode: "loop" }), { "data-action": "mode-loop" }),
+        choice("One-shot", launch.mode === "oneshot", () => setLaunch({ mode: "oneshot" }), { "data-action": "mode-oneshot" }),
+      ]),
+    ])
+  );
+
+  const followLabels = { none: "None", next: "Next", prev: "Prev", random: "Random" };
+  sheet.appendChild(
+    el("div", { class: "propsection" }, [
+      el("div", { class: "proplabel", text: "follow action" }),
+      el("div", { class: "choicegrid four" },
+        FOLLOW_ACTIONS.map((action) =>
+          choice(followLabels[action], launch.follow === action, () => setLaunch({ follow: action }), {
+            "data-action": `follow-${action}`,
+          })
+        )
+      ),
+    ])
+  );
+
+  const bars = el("div", { class: "numval", text: `${launch.followBars} bar${launch.followBars === 1 ? "" : "s"}` });
+  sheet.appendChild(
+    el("div", { class: "propsection" }, [
+      el("div", { class: "proplabel", text: "after" }),
+      el("div", { class: "numrow" }, [
+        el("div", {
+          class: "choice stepper",
+          text: "-",
+          onclick: () => setLaunch({ followBars: Math.max(1, launch.followBars - 1) }),
+        }),
+        bars,
+        el("div", {
+          class: "choice stepper",
+          text: "+",
+          onclick: () => setLaunch({ followBars: Math.min(16, launch.followBars + 1) }),
+        }),
+      ]),
+    ])
+  );
+
+  sheet.appendChild(
+    el("div", { class: "tfrow" }, [
+      el("div", {
+        class: "tfbtn",
+        text: "Launch",
+        onclick: async () => {
+          await ensureStarted();
+          const wasPlaying = audio.playing;
+          audio.launchClip(sceneIndex, track);
+          if (!wasPlaying) for (const t of TRACKS) playingTracks[t.key] = -1;
+          playingTracks[track] = sceneIndex;
+          updatePlayBtn(true);
+          applyPlaying();
+        },
+      }),
+      el("div", { class: "tfbtn", text: "Edit", onclick: () => openEditor(sceneIndex, track) }),
+    ])
+  );
+
+  scrim.classList.add("open");
+  sheet.classList.add("open");
 }
 
 // ---------------------------------------------------------------------------
@@ -754,6 +908,8 @@ function refreshClip(sceneIndex, track) {
   clip.innerHTML = "";
   clip.appendChild(el("div", { class: "tri", text: "▶" }));
   if (content) clip.appendChild(content);
+  const badge = launchBadge(song.scenes[sceneIndex], track);
+  if (badge) clip.appendChild(badge);
 }
 
 // ---------------------------------------------------------------------------
@@ -1072,7 +1228,8 @@ audio.onVisual((e) => {
     }
     return;
   }
-  if (e.scene !== undefined && e.scene !== playingScene) setPlaying(e.scene);
+  if (e.activeScenes) setActiveTracks(e.activeScenes);
+  else if (e.scene !== undefined && e.scene !== playingScene) setPlaying(e.scene);
   if (e.type === "step" && editor && editor.cursorCols) {
     if (editor.cursor >= 0) editor.cursorCols[editor.cursor]?.forEach((c) => c.classList.remove("cursor"));
     editor.cursor = e.stepInBar;

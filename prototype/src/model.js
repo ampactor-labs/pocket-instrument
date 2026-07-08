@@ -139,7 +139,7 @@ const SCENE_TAGS = ["A", "B", "C", "D", "E", "F", "G", "H"];
 export function makeScene(harmony, drums, melody = null, bass = null) {
   const tag = SCENE_TAGS[sceneSeq % SCENE_TAGS.length];
   sceneSeq += 1;
-  return {
+  const scene = {
     tag,
     harmony: harmony.slice(),
     drums: Object.fromEntries(
@@ -150,6 +150,8 @@ export function makeScene(harmony, drums, melody = null, bass = null) {
     melody: (melody || new Array(16).fill(null)).map((n) => (n ? { ...n } : null)),
     bass: (bass || new Array(16).fill(null)).map((n) => (n ? { ...n } : null)),
   };
+  scene.launch = cloneLaunch();
+  return scene;
 }
 
 export function defaultScene() {
@@ -175,7 +177,9 @@ export function defaultScene() {
 }
 
 export function cloneScene(scene) {
-  return makeScene(scene.harmony, scene.drums, scene.melody, scene.bass);
+  const cloned = makeScene(scene.harmony, scene.drums, scene.melody, scene.bass);
+  cloned.launch = cloneLaunch(scene.launch);
+  return cloned;
 }
 
 // --- Scale helpers for the piano roll (current key + scale) ---
@@ -207,6 +211,39 @@ export function snapToScale(midi) {
 }
 
 export const ARRANGE_TRACKS = ["harmony", "drums", "bass", "melody"];
+export const LAUNCH_MODES = ["loop", "oneshot"];
+export const FOLLOW_ACTIONS = ["none", "next", "prev", "random"];
+
+export function defaultLaunch(track = "drums") {
+  return {
+    mode: "loop",
+    follow: "none",
+    followBars: track === "harmony" ? 4 : 1,
+  };
+}
+
+function cloneLaunch(launch = {}) {
+  return Object.fromEntries(ARRANGE_TRACKS.map((track) => [track, { ...defaultLaunch(track), ...(launch[track] || {}) }]));
+}
+
+export function ensureLaunchSettings(scene) {
+  if (!scene.launch) scene.launch = {};
+  for (const track of ARRANGE_TRACKS) {
+    scene.launch[track] = { ...defaultLaunch(track), ...(scene.launch[track] || {}) };
+    if (!LAUNCH_MODES.includes(scene.launch[track].mode)) scene.launch[track].mode = "loop";
+    if (!FOLLOW_ACTIONS.includes(scene.launch[track].follow)) scene.launch[track].follow = "none";
+    scene.launch[track].followBars = Math.max(1, Math.min(16, scene.launch[track].followBars | 0 || defaultLaunch(track).followBars));
+  }
+  return scene.launch;
+}
+
+export function clipLaunch(scene, track) {
+  return ensureLaunchSettings(scene)[track];
+}
+
+export function clipLengthBars(scene, track) {
+  return track === "harmony" ? scene.harmony.length : 1;
+}
 
 export function makeSong() {
   const s = defaultScene();

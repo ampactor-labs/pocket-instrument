@@ -7,6 +7,7 @@
       content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
     />
     <title>pocket — session</title>
+    <link rel="icon" href="data:," />
     <style>
       :root {
         --bg: #0e0e0f;
@@ -242,6 +243,26 @@
         border-color: color-mix(in srgb, var(--tc) 85%, #fff);
         box-shadow: 0 0 0 1px color-mix(in srgb, var(--tc) 85%, #fff) inset;
       }
+      .clip.pressing {
+        filter: brightness(1.18);
+      }
+      .clip-badge {
+        position: absolute;
+        right: 5px;
+        bottom: 4px;
+        max-width: calc(100% - 10px);
+        padding: 2px 5px;
+        border-radius: 4px;
+        background: rgba(0, 0, 0, 0.38);
+        color: color-mix(in srgb, var(--tc) 78%, #fff);
+        font-size: 9px;
+        font-weight: 800;
+        line-height: 1;
+        text-transform: uppercase;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
       .clip.empty {
         color: var(--dim);
         border: 1px dashed #333;
@@ -324,6 +345,56 @@
         font-size: 13px;
         font-weight: 600;
         color: var(--text);
+      }
+      .propsection {
+        border-top: 1px solid #000;
+        padding: 10px 0;
+      }
+      .proplabel {
+        margin-bottom: 7px;
+        color: var(--dim);
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.4px;
+        text-transform: uppercase;
+      }
+      .choicegrid {
+        display: grid;
+        gap: 7px;
+      }
+      .choicegrid.two {
+        grid-template-columns: repeat(2, 1fr);
+      }
+      .choicegrid.four {
+        grid-template-columns: repeat(4, 1fr);
+      }
+      .choice,
+      .numval {
+        min-height: 42px;
+        border: 1px solid #000;
+        border-radius: 6px;
+        background: #2b2b2e;
+        color: var(--text);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 12px;
+        font-weight: 700;
+        text-align: center;
+      }
+      .choice.on {
+        background: color-mix(in srgb, var(--tc) 58%, #1d1d20);
+        color: #fff;
+        border-color: color-mix(in srgb, var(--tc) 74%, #000);
+      }
+      .numrow {
+        display: grid;
+        grid-template-columns: 48px 1fr 48px;
+        gap: 8px;
+        align-items: center;
+      }
+      .choice.stepper {
+        font-size: 18px;
       }
 
       /* Drum step grid */
