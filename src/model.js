@@ -259,8 +259,8 @@ export function makeSong() {
     arrangement: {
       harmony: [{ scene: 0, start: 0, len }],
       drums: [{ scene: 0, start: 0, len }],
-      bass: [],
-      melody: [],
+      bass: [{ scene: 0, start: 0, len }],
+      melody: [{ scene: 0, start: 0, len }],
     },
     loop: { on: false, start: 0, len: 4 },
     swing: 0.16, // global groove (16th-note swing amount)
