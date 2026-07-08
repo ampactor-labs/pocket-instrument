@@ -1,6 +1,6 @@
 # Roadmap / TODO
 
-The live prototype is `prototype/` (Vite + Tone.js + DOM). Working today: Session +
+The live prototype is the Vite + Tone.js + DOM app at the repo root. Working today: Session +
 Arrangement views, four clip editors (chords / drum rack / two piano rolls), mixer,
 devices (kit picker + synth cutoff/decay), global Key + Scale (scale-aware), one-tap
 Transforms (Arp / Oct / Humanize / Random / Clear), undo/redo, pinned transport.

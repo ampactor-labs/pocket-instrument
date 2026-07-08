@@ -16,14 +16,13 @@ educational, fun, and powerful** — steal Ableton's interaction model (grid, la
 direct drag, scale-awareness, one-tap transforms), never its density. Big touch targets,
 progressive disclosure, magic on one tap, always in key.
 
-The whole thing lives in `prototype/` (Vite + Tone.js + vanilla DOM/CSS). It runs on the
+The whole thing lives at the repo root (Vite + Tone.js + vanilla DOM/CSS). It runs on the
 builder's phone over the LAN. **Target device: Galaxy A16 5G** (MediaTek Dimensity 6300,
 entry-level) — performance is a first-class constraint, not an afterthought.
 
 ## Run it
 
 ```bash
-cd prototype
 npm install
 npm run dev -- --host          # iteration; open the printed Network URL on a phone
 ```
@@ -74,7 +73,7 @@ logic by reading state, and lean on the builder for on-device audio/feel checks.
 
 ## Architecture
 
-Four files in `prototype/`. Keep the boundaries: model is pure data + theory, audio is the
+Four files under `src/` + `index.html`. Keep the boundaries: model is pure data + theory, audio is the
 Tone.js graph, main is all UI/interaction, index.html is the shell + CSS.
 
 **`src/model.js`** — pure data and music theory, no DOM, no Tone. The `song`:
@@ -182,8 +181,8 @@ zoomable playgrounds). That aesthetic and paradigm were **dropped** after the bu
 they wanted literal mobile Ableton. Keep from those docs: the design philosophy (learning
 through play, can't-make-it-wrong, no gamification), and the research (Ableton Note, Hooktheory
 scale-degree color, Euclidean rhythm, ZUI). Ignore: the living-light visuals, the Pixi stack,
-the fractal-zoom paradigm, the `DECISIONS.md` platform calls. The current truth is `prototype/`
-+ `ROADMAP.md` + this file.
+the fractal-zoom paradigm, the `DECISIONS.md` platform calls. The current truth is the
+app at the repo root + `ROADMAP.md` + this file.
 
 ## How the builder works
 

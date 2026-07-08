@@ -2,7 +2,7 @@
 node_modules/
 dist/
 .vite/
-prototype/.tmp/
+.tmp/
 *.local
 .DS_Store
 
