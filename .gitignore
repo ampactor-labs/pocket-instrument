@@ -1,0 +1,15 @@
+# Node / web toolchain
+node_modules/
+dist/
+.vite/
+*.local
+.DS_Store
+
+# Rust (for the eventual native/WASM port)
+/target/
+**/*.rs.bk
+
+# Editor / OS cruft
+.idea/
+.vscode/
+*.swp
