@@ -196,7 +196,8 @@ export function makeMagicScene() {
 
   const harmony = Array.from({ length: 4 }, () => Math.floor(Math.random() * 7));
 
-  const melodyBase = Math.random() < 0.5 ? 60 : 48;
+  const melodyBases = [36, 48, 60, 72]; // Octaves 2, 3, 4, 5
+  const melodyBase = melodyBases[Math.floor(Math.random() * melodyBases.length)];
   const melodyNotes = scaleNotes(melodyBase, 15);
   const melody = new Array(16).fill(null);
   for (let s = 0; s < 16; s++) {
