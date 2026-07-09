@@ -1,4 +1,4 @@
-// Pocket — a mobile take on Ableton's Session view.
+// Noodles — a mobile take on Ableton's Session view.
 // Clip grid (tracks x scenes) + transport; tap a clip to edit it (drum rack /
 // chord editor). DOM/CSS for the DAW chrome, Tone.js underneath.
 
@@ -90,10 +90,14 @@ function chordMarkup(ci, { notes = false } = {}) {
 const song = makeSong();
 setScaleContext(song.key, song.scale);
 const audio = createAudio(song);
-audio.setHarmonyPreset(HARMONY_PRESET_NAMES[Math.floor(Math.random() * HARMONY_PRESET_NAMES.length)]);
-audio.setBassPreset(BASS_PRESET_NAMES[Math.floor(Math.random() * BASS_PRESET_NAMES.length)]);
-audio.setMelodyPreset(MELODY_PRESET_NAMES[Math.floor(Math.random() * MELODY_PRESET_NAMES.length)]);
-audio.setKit(KIT_NAMES[Math.floor(Math.random() * KIT_NAMES.length)]);
+const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+function randomizePresets() {
+  audio.setHarmonyPreset(pick(HARMONY_PRESET_NAMES));
+  audio.setBassPreset(pick(BASS_PRESET_NAMES));
+  audio.setMelodyPreset(pick(MELODY_PRESET_NAMES));
+  audio.setKit(pick(KIT_NAMES));
+}
+randomizePresets();
 const PROJECT_SCHEMA = "noodles-project";
 const PROJECT_VERSION = 1;
 const LOCAL_PROJECT_KEY = "noodles:last-project";
@@ -135,7 +139,6 @@ const sceneEls = []; // per scene: { row, clips: {track: el} }
 
 let view = "session"; // 'session' | 'arrangement'
 let sessionRecord = false;
-let sessionRecordStartBar = 0;
 let ppb = 37; // arrangement pixels-per-bar; default zoomed out so bar 8 fills screen
 let arrPlayBar = 0; // arrangement playhead position in bars
 let selClip = null; // { track, idx }
@@ -286,8 +289,11 @@ function renderFooter() {
   });
   scaleSel.addEventListener("change", () => setKeyScale(song.key, scaleSel.value));
   const keyctl = el("div", { class: "keyctl" }, [keySel, scaleSel]);
+  // The dice sits with the song's musical identity: one tap rolls a whole new
+  // key + tempo + sounds + magic scene, same as a fresh load. Undo-safe.
+  const diceBtn = el("div", { class: "tbtn accent", text: "🎲", id: "dice-btn", title: "New song: random key, tempo, sounds", onclick: rerollSong });
   footer.append(
-    el("div", { class: "frow" }, [keyctl, el("div", { class: "fspacer" }), groove])
+    el("div", { class: "frow" }, [keyctl, diceBtn, el("div", { class: "fspacer" }), groove])
   );
 }
 
@@ -344,11 +350,7 @@ function deleteSceneAt(index) {
 }
 
 function openAddSceneSheet() {
-  editor = null;
-  cancelAnimationFrame(mixerRAF);
-  mixerRAF = 0;
-  sheet.innerHTML = "";
-  sheet.style.setProperty("--tc", "#e8b84b");
+  resetSheet("#e8b84b");
   const baseIndex = playingScene >= 0 ? playingScene : song.scenes.length - 1;
   const addScene = (scene) => {
     pushUndo();
@@ -357,28 +359,15 @@ function openAddSceneSheet() {
     renderSession();
     if (view === "arrangement") renderArrangement();
   };
-  sheet.appendChild(
-    el("div", { class: "sheet-bar" }, [
-      el("div", { class: "swatch" }),
-      el("div", { class: "title", text: "Add Scene" }),
-      el("div", { class: "sub", text: "blank · duplicate · magic" }),
-      el("div", { class: "close", text: "Done", onclick: closeEditor }),
-    ])
-  );
+  sheet.appendChild(sheetBar("Add Scene", "blank · duplicate · magic"));
   sheet.appendChild(
     el("div", { class: "tfrow" }, [
       el("div", { class: "tfbtn", text: "Blank", onclick: () => addScene(emptyScene()) }),
       el("div", { class: "tfbtn", text: "Duplicate Current", onclick: () => addScene(cloneScene(song.scenes[baseIndex])) }),
-      el("div", { class: "tfbtn accent", text: "Magic", onclick: () => {
-        pushUndo();
-        song.scenes.push(makeMagicScene());
-        closeEditor();
-        renderSession();
-      } }),
+      el("div", { class: "tfbtn accent", text: "Magic", onclick: () => addScene(makeMagicScene()) }),
     ])
   );
-  scrim.classList.add("open");
-  sheet.classList.add("open");
+  openSheet();
 }
 
 
@@ -460,11 +449,7 @@ function bindTempoControl(node) {
 }
 
 function openTempoEditor() {
-  editor = null;
-  cancelAnimationFrame(mixerRAF);
-  mixerRAF = 0;
-  sheet.innerHTML = "";
-  sheet.style.setProperty("--tc", "#e8b84b");
+  resetSheet("#e8b84b");
   const input = el("input", {
     class: "tempo-input",
     type: "number",
@@ -485,21 +470,29 @@ function openTempoEditor() {
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") setTypedTempo();
   });
-  sheet.appendChild(
-    el("div", { class: "sheet-bar" }, [
-      el("div", { class: "swatch" }),
-      el("div", { class: "title", text: "Tempo" }),
-      el("div", { class: "sub", text: `${TEMPO_MIN}-${TEMPO_MAX} BPM` }),
-      el("div", { class: "close", text: "Done", onclick: setTypedTempo }),
-    ])
-  );
+  sheet.appendChild(sheetBar("Tempo", `${TEMPO_MIN}-${TEMPO_MAX} BPM`, { onDone: setTypedTempo }));
   sheet.appendChild(el("div", { class: "tempo-sheet" }, [input]));
-  scrim.classList.add("open");
-  sheet.classList.add("open");
+  openSheet();
   setTimeout(() => {
     input.focus();
     input.select();
   }, 40);
+}
+
+// The dice: exactly what a fresh page load rolls — new key, scale, tempo,
+// device presets, and one magic scene — without the reload. Undo brings the
+// song back (device presets stay rolled; they're not part of song snapshots).
+function rerollSong() {
+  pushUndo();
+  const fresh = makeSong();
+  for (const key of Object.keys(song)) delete song[key];
+  Object.assign(song, fresh);
+  randomizePresets();
+  selClip = null;
+  arrPlayBar = 0;
+  playingScene = -1;
+  for (const t of TRACKS) playingTracks[t.key] = -1;
+  refreshAll();
 }
 
 // Change the global key/scale; harmony follows automatically (it's degree-based),
@@ -689,19 +682,8 @@ function bindSceneCell(launch, sceneIndex) {
 
 function openSceneOptions(sceneIndex) {
   const scene = song.scenes[sceneIndex];
-  editor = null;
-  cancelAnimationFrame(mixerRAF);
-  mixerRAF = 0;
-  sheet.innerHTML = "";
-  sheet.style.setProperty("--tc", "#e8b84b");
-  sheet.appendChild(
-    el("div", { class: "sheet-bar" }, [
-      el("div", { class: "swatch" }),
-      el("div", { class: "title", text: "Scene Options" }),
-      el("div", { class: "sub", text: `Scene ${scene.tag}` }),
-      el("div", { class: "close", text: "Done", onclick: closeEditor }),
-    ])
-  );
+  resetSheet("#e8b84b");
+  sheet.appendChild(sheetBar("Scene Options", `Scene ${scene.tag}`));
   sheet.appendChild(
     el("div", { class: "tfrow" }, [
       el("div", { class: "tfbtn", text: "▶ Launch", onclick: async () => {
@@ -742,8 +724,7 @@ function openSceneOptions(sceneIndex) {
       }}),
     ])
   );
-  scrim.classList.add("open");
-  sheet.classList.add("open");
+  openSheet();
 }
 
 function renderSession() {
@@ -878,27 +859,21 @@ document.addEventListener("click", (e) => {
 
 function openEditor(sceneIndex, track) {
   const scene = song.scenes[sceneIndex];
+  resetSheet(trackColor(track));
   editor = { scene: sceneIndex, track, cursorCols: null, cursor: -1 };
-  sheet.innerHTML = "";
-  sheet.style.setProperty("--tc", trackColor(track));
 
   const title = track === "drums" ? "Drum Rack" : track === "harmony" ? "Chords" : "Piano Roll";
   sheet.appendChild(
-    el("div", { class: "sheet-bar" }, [
-      el("div", { class: "swatch" }),
-      el("div", { class: "title", text: title }),
-      el("div", { class: "sub", text: `${TRACKS.find((t) => t.key === track).name} · Scene ${scene.tag}` }),
-      el("div", { class: "close", style: "margin-right:6px", text: "Options", onclick: () => openClipProps(sceneIndex, track) }),
-      el("div", { class: "close", text: "Done", onclick: closeEditor }),
-    ])
+    sheetBar(title, `${TRACKS.find((t) => t.key === track).name} · Scene ${scene.tag}`, {
+      buttons: [el("div", { class: "close", style: "margin-right:6px", text: "Options", onclick: () => openClipProps(sceneIndex, track) })],
+    })
   );
 
   if (track === "drums") buildDrumEditor(scene);
   else if (track === "harmony") buildHarmonyEditor(sceneIndex, scene);
   else buildPianoEditor(sceneIndex, scene, track);
 
-  scrim.classList.add("open");
-  sheet.classList.add("open");
+  openSheet();
 }
 
 function closeEditor() {
@@ -909,19 +884,41 @@ function closeEditor() {
   sheet.classList.remove("open");
 }
 
+// Every sheet goes through the same three moves: reset the sheet (also stops a
+// running mixer meter loop), append a title bar, open. Keep them here so no
+// opener can forget one.
+function resetSheet(color) {
+  editor = null;
+  cancelAnimationFrame(mixerRAF);
+  mixerRAF = 0;
+  sheet.innerHTML = "";
+  sheet.style.setProperty("--tc", color);
+}
+
+function sheetBar(title, sub, { buttons = [], onDone = closeEditor } = {}) {
+  return el("div", { class: "sheet-bar" }, [
+    el("div", { class: "swatch" }),
+    el("div", { class: "title", text: title }),
+    el("div", { class: "sub", text: sub }),
+    ...buttons,
+    el("div", { class: "close", text: "Done", onclick: onDone }),
+  ]);
+}
+
+function openSheet() {
+  scrim.classList.add("open");
+  sheet.classList.add("open");
+}
+
 function choice(label, on, onclick, attrs = {}) {
   return el("div", { class: "choice" + (on ? " on" : ""), text: label, onclick, ...attrs });
 }
 
 function openClipProps(sceneIndex, track) {
-  editor = null;
-  cancelAnimationFrame(mixerRAF);
-  mixerRAF = 0;
   const scene = song.scenes[sceneIndex];
   const launch = clipLaunch(scene, track);
   const meta = TRACKS.find((t) => t.key === track);
-  sheet.innerHTML = "";
-  sheet.style.setProperty("--tc", meta.color);
+  resetSheet(meta.color);
 
   const setLaunch = (patch) => {
     const changed = Object.entries(patch).some(([k, v]) => launch[k] !== v);
@@ -932,14 +929,7 @@ function openClipProps(sceneIndex, track) {
     openClipProps(sceneIndex, track);
   };
 
-  sheet.appendChild(
-    el("div", { class: "sheet-bar" }, [
-      el("div", { class: "swatch" }),
-      el("div", { class: "title", text: "Clip Properties" }),
-      el("div", { class: "sub", text: `${meta.name} · Scene ${scene.tag}` }),
-      el("div", { class: "close", text: "Done", onclick: closeEditor }),
-    ])
-  );
+  sheet.appendChild(sheetBar("Clip Properties", `${meta.name} · Scene ${scene.tag}`));
 
   sheet.appendChild(
     el("div", { class: "propsection" }, [
@@ -1031,8 +1021,7 @@ function openClipProps(sceneIndex, track) {
     ])
   );
 
-  scrim.classList.add("open");
-  sheet.classList.add("open");
+  openSheet();
 }
 
 // ---------------------------------------------------------------------------
@@ -1046,12 +1035,6 @@ const MIX_DEFAULTS = {
   melody: { vol: DEFAULT_TRACK_VOLUME_DB, pan: 0, verb: -30, echo: -30, mute: false, solo: false },
 };
 const mixState = structuredClone(MIX_DEFAULTS);
-
-function slider(min, max, step, val, oninput) {
-  const s = el("input", { type: "range", min, max, step, value: val });
-  s.addEventListener("input", () => oninput(parseFloat(s.value)));
-  return s;
-}
 
 function knob(label, min, max, step, val, onChange, format = (v) => v) {
   const container = el("div", { class: "knob-container" });
@@ -1248,11 +1231,7 @@ function bindTrackHeader(node, track) {
 function openTrackOptions(track) {
   const meta = TRACKS.find((t) => t.key === track);
   if (!meta) return;
-  editor = null;
-  cancelAnimationFrame(mixerRAF);
-  mixerRAF = 0;
-  sheet.innerHTML = "";
-  sheet.style.setProperty("--tc", meta.color);
+  resetSheet(meta.color);
   const trackChoice = (kind, label) =>
     el("div", {
       class: `choice track-choice ${mixState[track][kind] ? "on" : ""}`,
@@ -1265,14 +1244,7 @@ function openTrackOptions(track) {
         else toggleTrackSolo(track);
       },
     });
-  sheet.appendChild(
-    el("div", { class: "sheet-bar" }, [
-      el("div", { class: "swatch" }),
-      el("div", { class: "title", text: "Track Options" }),
-      el("div", { class: "sub", text: meta.name }),
-      el("div", { class: "close", text: "Done", onclick: closeEditor }),
-    ])
-  );
+  sheet.appendChild(sheetBar("Track Options", meta.name));
   sheet.appendChild(
     el("div", { class: "propsection" }, [
       el("div", { class: "proplabel", text: "state" }),
@@ -1286,23 +1258,16 @@ function openTrackOptions(track) {
       el("div", { class: "tfbtn", text: "Reset Sends", onclick: () => { resetTrackMix(track, { sendsOnly: true }); openTrackOptions(track); } }),
     ])
   );
-  scrim.classList.add("open");
-  sheet.classList.add("open");
+  openSheet();
   updateTrackMixUI();
 }
 
 function openMixer(focusTrack = null) {
-  editor = null;
-  sheet.innerHTML = "";
-  sheet.classList.add("mixer-sheet");
-  sheet.style.setProperty("--tc", "#8a8a90");
+  resetSheet("#8a8a90");
   sheet.appendChild(
-      el("div", { class: "sheet-bar" }, [
-        el("div", { class: "title", text: "Mixer" }),
-      el("div", { class: "sub", text: "levels · sends · devices" }),
-      el("div", { class: "close", style: "font-size:11px;padding:5px 7px", text: "Reset", onclick: () => { resetAllMix(); openMixer(focusTrack); } }),
-      el("div", { class: "close", text: "Done", onclick: closeEditor }),
-    ])
+    sheetBar("Mixer", "levels · sends · devices", {
+      buttons: [el("div", { class: "close", style: "font-size:11px;padding:5px 7px", text: "Reset", onclick: () => { resetAllMix(); openMixer(focusTrack); } })],
+    })
   );
 
   const container = el("div", { class: "mx-container" });
@@ -1372,8 +1337,7 @@ function openMixer(focusTrack = null) {
   );
   sheet.appendChild(container);
 
-  scrim.classList.add("open");
-  sheet.classList.add("open");
+  openSheet();
   if (focusTrack) {
     setTimeout(() => sheet.querySelector(`.mx-strip[data-track="${focusTrack}"]`)?.scrollIntoView({ inline: "center", block: "nearest" }), 30);
   }
@@ -1549,7 +1513,8 @@ function buildDrumEditor(scene) {
   }
   sheet.appendChild(scrollContainer);
 
-  const vlane = el("div", { class: "vlane" });
+  // .drums variant: match the 54px pad column so bars sit under their steps.
+  const vlane = el("div", { class: "vlane drums" });
   const vbars = [];
   vlane.appendChild(el("div", { class: "vkey", text: "vel" }));
   const vsteps = el("div", { class: "vsteps" });
@@ -2264,7 +2229,7 @@ function restoreDevices(devices = {}) {
 function restoreMix(mix = {}) {
   for (const t of TRACKS) {
     const key = t.key;
-    const defaults = { vol: -6, pan: 0, verb: -30, echo: -30, mute: false, solo: false };
+    const defaults = MIX_DEFAULTS[key];
     const src = mix[key] || {};
     const parsed = {
       vol: Number.isFinite(Number(src.vol)) ? Number(src.vol) : defaults.vol,
@@ -2340,9 +2305,7 @@ function loadLocalProject(status) {
 
 let exporting = false;
 function openExport() {
-  editor = null;
-  sheet.innerHTML = "";
-  sheet.style.setProperty("--tc", "#e8b84b");
+  resetSheet("#e8b84b");
   const status = el("div", { class: "exp-status", text: "" });
   const fileInput = el("input", { class: "project-file", type: "file", accept: ".noodles,application/json" });
   fileInput.addEventListener("change", () => loadProjectFile(fileInput.files?.[0], status));
@@ -2370,14 +2333,7 @@ function openExport() {
     exporting = false;
   }
 
-  sheet.appendChild(
-    el("div", { class: "sheet-bar" }, [
-      el("div", { class: "swatch" }),
-      el("div", { class: "title", text: "Export" }),
-      el("div", { class: "sub", text: "project · WAV" }),
-      el("div", { class: "close", text: "Done", onclick: closeEditor }),
-    ])
-  );
+  sheet.appendChild(sheetBar("Export", "project · WAV"));
   sheet.appendChild(
     el("div", { class: "propsection" }, [
       el("div", { class: "proplabel", text: "project" }),
@@ -2400,8 +2356,7 @@ function openExport() {
     ])
   );
   sheet.appendChild(status);
-  scrim.classList.add("open");
-  sheet.classList.add("open");
+  openSheet();
 }
 
 // ---------------------------------------------------------------------------
@@ -2427,11 +2382,10 @@ audio.onVisual((e) => {
   
   if (e.type === "step") {
     if (sessionRecord && audio.playing && e.stepInBar === 0 && view === "session") {
-      let dirty = false;
       for (const track of ARRANGE_TRACKS) {
         const sceneIdx = e.activeScenes[track];
         const trackArr = song.arrangement[track];
-        
+
         // Truncate or remove existing clips that overlap the current arrPlayBar
         for (let i = trackArr.length - 1; i >= 0; i--) {
           const c = trackArr[i];
@@ -2458,11 +2412,9 @@ audio.onVisual((e) => {
           if (!extended) {
             trackArr.push({ scene: sceneIdx, start: arrPlayBar, len: 1 });
           }
-          dirty = true;
         }
       }
       arrPlayBar++;
-      if (dirty) scheduleSave();
     }
 
     if (e.progress) {
@@ -2505,3 +2457,7 @@ document.addEventListener("keydown", (e) => {
   e.preventDefault();
   togglePlayback();
 });
+
+// Debug/measurement handle for the headless harnesses (smoke, calibrate).
+// Not a public API — the scripts drive the same audio engine the UI does.
+window.__noodles = { song, audio, applyProject };
