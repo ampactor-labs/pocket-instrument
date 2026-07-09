@@ -79,33 +79,29 @@ export function createAudio(song) {
   // Algorithmic (Freeverb) instead of convolution — far cheaper per sample on a
   // low-end mobile CPU, and fine for a send reverb.
   const reverb = new Tone.Freeverb({ roomSize: 0.72, dampening: 2600, wet: 1 }).connect(master);
-  // A Channel return receives the "verb" send bus and feeds the reverb.
-  const reverbReturn = new Tone.Channel().connect(reverb);
-  reverbReturn.receive("verb");
   const echo = new Tone.FeedbackDelay({ delayTime: "8n", feedback: 0.26, wet: 0.72 }).connect(master);
-  const echoReturn = new Tone.Channel({ volume: -4 }).connect(echo);
-  echoReturn.receive("echo");
+  const echoReturn = new Tone.Gain(Tone.dbToGain(-4)).connect(echo);
 
-  // Mixer strips.
+  // Mixer strips — direct gain wiring (no send/receive bus, which can silently
+  // fail depending on Tone.js version and context lifecycle).
   const channels = {};
   const meters = {};
   const verbSends = {};
   const echoSends = {};
   const muteState = Object.fromEntries(TRACK_KEYS.map((track) => [track, false]));
   const soloState = Object.fromEntries(TRACK_KEYS.map((track) => [track, false]));
+  const verbDefault = { harmony: -60, melody: -60, drums: -60, bass: -60 };
+  const echoDefault = { harmony: -60, melody: -60, drums: -60, bass: -60 };
   for (const k of TRACK_KEYS) {
     const chVol = -6;
     channels[k] = new Tone.Channel({ volume: chVol, pan: 0 }).connect(master);
     meters[k] = new Tone.Meter();
     channels[k].connect(meters[k]);
-    verbSends[k] = channels[k].send("verb", -60);
-    echoSends[k] = channels[k].send("echo", -60);
-  }
-  const verbDefault = { harmony: -60, melody: -60, drums: -60, bass: -60 };
-  const echoDefault = { harmony: -60, melody: -60, drums: -60, bass: -60 };
-  for (const k of TRACK_KEYS) {
-    verbSends[k].gain.value = Tone.dbToGain(verbDefault[k]);
-    echoSends[k].gain.value = Tone.dbToGain(echoDefault[k]);
+    // Direct gain nodes wired to the effects instead of the send/receive bus
+    verbSends[k] = new Tone.Gain(0).connect(reverb);
+    channels[k].connect(verbSends[k]);
+    echoSends[k] = new Tone.Gain(0).connect(echoReturn);
+    channels[k].connect(echoSends[k]);
   }
   function applyTrackGates() {
     const anySolo = TRACK_KEYS.some((track) => soloState[track]);
@@ -423,6 +419,13 @@ export function createAudio(song) {
     stop() {
       transport.pause();
       playing = false;
+      // Immediately silence all voices so pause feels instant
+      try { pad.releaseAll(Tone.now()); } catch {}
+      try { halo.triggerRelease(Tone.now()); } catch {}
+      try { sub.triggerRelease(Tone.now()); } catch {}
+      try { bassTrk.releaseAll(Tone.now()); } catch {}
+      try { lead.releaseAll(Tone.now()); } catch {}
+      prevVoiced = null;
       for (const track of TRACK_KEYS) queuedTracks[track] = -1; // clear queues on stop
       draw.schedule(() => visualCb({ type: "queue", activeScenes: activeScenes(), queuedTracks: getQueuedTracks() }), Tone.now());
     },
@@ -507,10 +510,12 @@ export function createAudio(song) {
       channels[track].pan.value = p;
     },
     setSend(track, db) {
-      verbSends[track].gain.value = db <= -59 ? 0 : Tone.dbToGain(db);
+      const v = db <= -59 ? 0 : Tone.dbToGain(db);
+      verbSends[track].gain.rampTo(v, 0.02);
     },
     setEcho(track, db) {
-      echoSends[track].gain.value = db <= -59 ? 0 : Tone.dbToGain(db);
+      const v = db <= -59 ? 0 : Tone.dbToGain(db);
+      echoSends[track].gain.rampTo(v, 0.02);
     },
     setMute(track, on) {
       if (!(track in channels)) return;

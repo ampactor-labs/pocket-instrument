@@ -897,21 +897,20 @@
       .mx-container {
         display: flex;
         gap: 2px;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
         padding-bottom: 4px;
       }
       .mx-strip {
-        flex: 1 0 0;
-        min-width: 74px;
+        flex: 1 1 0;
+        min-width: 0;
         background: #1a1a1c;
         border: 1px solid #000;
         border-radius: 8px;
-        padding: 10px 6px 8px;
+        padding: 8px 4px 6px;
         display: flex;
         flex-direction: column;
         align-items: center;
-        gap: 6px;
+        gap: 4px;
+        overflow: hidden;
       }
       .mx-name {
         display: flex;
@@ -952,8 +951,8 @@
         flex-shrink: 0;
       }
       .mx-meter {
-        width: 18px;
-        height: 100px;
+        width: 16px;
+        height: 72px;
         background: #111;
         border-radius: 4px;
         overflow: hidden;
@@ -978,8 +977,8 @@
       .mx-vfader {
         writing-mode: vertical-lr;
         direction: rtl;
-        height: 90px;
-        width: 28px;
+        height: 64px;
+        width: 24px;
         accent-color: var(--tc);
       }
       .mx-val {

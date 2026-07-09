@@ -209,8 +209,7 @@ function renderTransport() {
     onclick: () => setView(view === "session" ? "arrangement" : "session"),
   });
   const fileBtn = el("div", { class: "tbtn", text: "File", id: "file-btn", onclick: openExport });
-  const mixBtn = el("div", { class: "tbtn", text: "Mix", id: "mix-btn", onclick: openMixer });
-  const tright = el("div", { class: "tright" }, [mixBtn, viewBtn, fileBtn]);
+  const tright = el("div", { class: "tright" }, [viewBtn, fileBtn]);
   transport.append(left, tempo, tright);
   updateUndoButtons();
   renderFooter();
@@ -254,20 +253,8 @@ function renderFooter() {
   });
   scaleSel.addEventListener("change", () => setKeyScale(song.key, scaleSel.value));
   const keyctl = el("div", { class: "keyctl" }, [keySel, scaleSel]);
-  // Magic button: Generate a new inspiring scene
-  const magicBtn = el("div", {
-    class: "tbtn accent",
-    text: "Magic",
-    id: "magic-btn",
-    title: "Generate a new random scene",
-    onclick: () => {
-      pushUndo();
-      generateMagicScene();
-      renderSession();
-    },
-  });
   footer.append(
-    el("div", { class: "frow" }, [keyctl, el("div", { class: "fspacer" }), groove, el("div", { class: "fspacer" }), magicBtn])
+    el("div", { class: "frow" }, [keyctl, el("div", { class: "fspacer" }), groove])
   );
 }
 
@@ -1256,19 +1243,14 @@ function openTrackOptions(track) {
 function openMixer(focusTrack = null) {
   editor = null;
   sheet.innerHTML = "";
+  sheet.classList.add("mixer-sheet");
   sheet.style.setProperty("--tc", "#8a8a90");
   sheet.appendChild(
       el("div", { class: "sheet-bar" }, [
         el("div", { class: "title", text: "Mixer" }),
-      el("div", { class: "sub", text: "levels · verb · echo · devices" }),
+      el("div", { class: "sub", text: "levels · sends · devices" }),
+      el("div", { class: "close", style: "font-size:11px;padding:5px 7px", text: "Reset", onclick: () => { resetAllMix(); openMixer(focusTrack); } }),
       el("div", { class: "close", text: "Done", onclick: closeEditor }),
-    ])
-  );
-
-  sheet.appendChild(
-    el("div", { class: "tfrow" }, [
-      el("div", { class: "tfbtn", text: "Reset Mix", onclick: () => { resetAllMix(); openMixer(focusTrack); } }),
-      el("div", { class: "tfbtn", text: "Reset Sends", onclick: () => { resetAllMix({ sendsOnly: true }); openMixer(focusTrack); } }),
     ])
   );
 
@@ -1282,9 +1264,8 @@ function openMixer(focusTrack = null) {
     const meter = el("div", { class: "mx-meter" }, [el("div", { class: "mx-meter-track" }, [meterFill])]);
 
     const volSlider = el("input", { type: "range", min: "-40", max: "6", step: "1", value: String(ms.vol), class: "mx-vfader" });
-    volSlider.addEventListener("input", () => { ms.vol = parseFloat(volSlider.value); audio.setVol(k, ms.vol); });
-    const volLabel = el("div", { class: "mx-val", text: `${ms.vol} dB` });
-    volSlider.addEventListener("input", () => { volLabel.textContent = `${ms.vol} dB`; });
+    const volLabel = el("div", { class: "mx-val", text: `${ms.vol}` });
+    volSlider.addEventListener("input", () => { ms.vol = parseFloat(volSlider.value); audio.setVol(k, ms.vol); volLabel.textContent = `${ms.vol}`; });
 
     const panSlider = slider(-1, 1, 0.05, ms.pan, (v) => { ms.pan = v; audio.setPan(k, v); });
     const verbSlider = slider(-60, 0, 1, ms.verb, (v) => { ms.verb = v; audio.setSend(k, v); });
@@ -1332,9 +1313,7 @@ function openMixer(focusTrack = null) {
   container.appendChild(
     el("div", { class: "mx-strip mx-master", style: "--tc:#d2d2d4", "data-track": "master" }, [
       el("div", { class: "mx-name" }, [el("span", { class: "mx-dot" }), el("span", { text: "Master" })]),
-      el("div", { class: "mx-master-note", text: "safe chain" }),
       el("div", { class: "mx-meter" }, [el("div", { class: "mx-meter-track" }, [masterFill])]),
-      el("div", { class: "mx-val", text: "polish on" }),
       el("div", { class: "mx-master-chain", text: "trim · warm · glue · clip · limit" }),
     ])
   );
