@@ -221,8 +221,13 @@ export function makeMagicScene() {
       melody[s] = [{ midi: melodyNotes[Math.floor(Math.random() * melodyNotes.length)], len: 1, vel: 0.7 + Math.random() * 0.3 }];
     }
   }
-  if (!melody.some(Boolean)) {
-    melody[0] = [{ midi: melodyNotes[Math.floor(Math.random() * melodyNotes.length)], len: 2, vel: 0.85 }];
+  // Floor at four notes: a 2-note roll reads as a dud, not a melody. Fill on
+  // empty 8th-grid steps so the top line stays a hook, never a wash.
+  const emptyEvens = () => [0, 2, 4, 6, 8, 10, 12, 14].filter((s) => !melody[s]);
+  while (melody.filter(Boolean).length < 4) {
+    const open = emptyEvens();
+    const s = open[Math.floor(Math.random() * open.length)];
+    melody[s] = [{ midi: melodyNotes[Math.floor(Math.random() * melodyNotes.length)], len: 2, vel: 0.75 + Math.random() * 0.2 }];
   }
 
   const bassBase = Math.random() < 0.5 ? 36 : 24;
