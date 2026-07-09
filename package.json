@@ -1,5 +1,5 @@
 {
-  "name": "noodles-prototype",
+  "name": "noodles",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -10,8 +10,6 @@
     "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
-    "pixi-filters": "^6.1.5",
-    "pixi.js": "^8.19.0",
     "tone": "^14.7.77"
   },
   "devDependencies": {

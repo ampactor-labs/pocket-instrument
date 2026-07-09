@@ -7,7 +7,7 @@ const cwd = process.cwd();
 const chrome = process.env.CHROME_BIN || "/usr/bin/google-chrome";
 const host = process.env.SMOKE_HOST || "127.0.0.1";
 const port = Number(process.env.SMOKE_PORT || 4173);
-const url = process.env.SMOKE_URL || `http://${host}:${port}/`;
+const url = process.env.SMOKE_URL || `http://${host}:${port}/noodles/`;
 const outDir = path.join(cwd, ".tmp");
 const shotPath = path.join(outDir, "smoke.png");
 const propsShotPath = path.join(outDir, "smoke-clip-props.png");
@@ -64,6 +64,48 @@ async function tap(page, selector) {
   await handle.click();
 }
 
+async function closeSheet(page) {
+  await page.waitForSelector(".sheet-bar .close", { visible: true });
+  const closed = await page.evaluate(() => {
+    const buttons = [...document.querySelectorAll(".sheet-bar .close")];
+    buttons.at(-1)?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    return buttons.length > 0;
+  });
+  if (!closed) throw new Error("no sheet close button");
+}
+
+async function clickAction(page, action) {
+  const selector = `[data-action="${action}"]`;
+  await page.waitForSelector(selector, { visible: true });
+  const clicked = await page.evaluate((selector) => {
+    const node = document.querySelector(selector);
+    node?.click();
+    return !!node;
+  }, selector);
+  if (!clicked) throw new Error(`missing action ${action}`);
+}
+
+async function tapPianoCell(page, row, step) {
+  const handle = await page.evaluateHandle(
+    ({ row, step }) => document.querySelectorAll(".prow")[row]?.querySelectorAll(".pcell")[step],
+    { row, step }
+  );
+  const el = handle.asElement();
+  if (!el) throw new Error(`missing piano cell row ${row} step ${step}`);
+  await el.evaluate((node) => node.scrollIntoView({ block: "center", inline: "center" }));
+  await wait(80);
+  const box = await el.boundingBox();
+  if (!box) throw new Error(`piano cell row ${row} step ${step} has no box`);
+  await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+  await wait(120);
+}
+
+async function tapAt(page, x, y) {
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.up();
+}
+
 function assertState(ok, msg) {
   if (!ok) throw new Error(msg);
 }
@@ -93,7 +135,8 @@ try {
     if (msg.type() === "error") errors.push(`console:${msg.text()}`);
   });
 
-  await page.goto(url, { waitUntil: "networkidle2" });
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
+  await page.waitForSelector("#transport", { visible: true });
   await wait(500);
 
   const initial = await page.evaluate(() => ({
@@ -108,10 +151,24 @@ try {
   await tap(page, "#bpm");
   await page.waitForFunction(() => document.querySelector(".sheet-bar .title")?.textContent === "Tempo");
   await page.$eval(".tempo-input", (el) => { el.value = "104"; });
-  await tap(page, ".sheet-bar .close");
+  await closeSheet(page);
   await page.waitForFunction(() => !document.querySelector("#sheet")?.classList.contains("open"));
   const typedTempo = await page.$eval("#bpm", (el) => el.textContent);
   assertState(typedTempo.includes("104"), `typed tempo did not apply: ${typedTempo}`);
+
+  await tap(page, '.clip.filled[data-track="melody"]');
+  await page.waitForFunction(() => document.querySelector(".sheet-bar .title")?.textContent === "Piano Roll");
+  let stackedNotes = 0;
+  for (const row of [2, 4, 6, 8, 10]) {
+    await tapPianoCell(page, row, 1);
+    stackedNotes = await page.evaluate(() =>
+      [...document.querySelectorAll(".prow")].filter((row) => row.querySelectorAll(".pcell")[1]?.classList.contains("on")).length
+    );
+    if (stackedNotes >= 2) break;
+  }
+  assertState(stackedNotes >= 2, `expected layered notes in one step, got ${stackedNotes}`);
+  await closeSheet(page);
+  await page.waitForFunction(() => !document.querySelector("#sheet")?.classList.contains("open"));
 
   await tap(page, ".tbtn.play");
   await page.waitForFunction(() => document.querySelectorAll(".clip.playing").length >= 4);
@@ -121,20 +178,22 @@ try {
 
   await longPress(page, '.clip.filled[data-track="drums"]');
   await page.waitForFunction(() => document.querySelector(".sheet-bar .title")?.textContent === "Clip Properties");
-  await tap(page, '[data-action="mode-oneshot"]');
-  await tap(page, '[data-action="follow-next"]');
+  await clickAction(page, "mode-oneshot");
+  await page.waitForFunction(() => document.querySelector('.clip.filled[data-track="drums"] .clip-badge')?.textContent.includes("1x"));
+  await clickAction(page, "follow-next");
+  await page.waitForFunction(() => document.querySelector('.clip.filled[data-track="drums"] .clip-badge')?.textContent.includes("next"));
   const badge = await page.$eval('.clip.filled[data-track="drums"] .clip-badge', (el) => el.textContent);
   assertState(badge.includes("1x") && badge.includes("next"), `unexpected launch badge: ${badge}`);
   const scenesBeforeDuplicate = await page.$$eval(".scenecell", (els) => els.length);
-  await tap(page, '[data-action="duplicate-scene"]');
+  await clickAction(page, "duplicate-scene");
   await page.waitForFunction((before) => document.querySelectorAll(".scenecell").length === before + 1, {}, scenesBeforeDuplicate);
   const scenesAfterDuplicate = await page.$$eval(".scenecell", (els) => els.length);
   assertState(scenesAfterDuplicate === scenesBeforeDuplicate + 1, "session duplicate did not add a scene");
   await page.screenshot({ path: propsShotPath, fullPage: true });
 
-  await tap(page, ".sheet-bar .close");
+  await closeSheet(page);
   await page.waitForFunction(() => !document.querySelector("#sheet")?.classList.contains("open"));
-  await tap(page, ".seg .opt:nth-child(2)");
+  await tap(page, "#view-toggle-btn");
   const arrange = await page.$eval("#app", (app) => app.classList.contains("arrange"));
   assertState(arrange, "arrangement view did not open");
 
@@ -149,27 +208,31 @@ try {
 
   await longPress(page, '.arr-thead[data-track="drums"]');
   await page.waitForFunction(() => document.querySelector(".sheet-bar .title")?.textContent === "Track Options");
-  await tap(page, ".sheet-bar .close");
+  await closeSheet(page);
   await page.waitForFunction(() => !document.querySelector("#sheet")?.classList.contains("open"));
   await tap(page, ".arr-corner .view-mix");
   await page.waitForFunction(() => document.querySelector(".sheet-bar .title")?.textContent === "Mixer");
   const mixerText = await page.$eval("#sheet", (el) => el.textContent);
   assertState(mixerText.includes("echo"), "mixer missing echo send");
   assertState(mixerText.includes("Master") && mixerText.includes("safe chain"), "mixer missing master strip");
+  await tap(page, ".tbtn.play");
+  const mixerStillOpen = await page.$eval("#sheet", (el) => el.classList.contains("open"));
+  assertState(mixerStillOpen, "play/pause dismissed an open sheet");
+  await tap(page, ".tbtn.play");
   await page.screenshot({ path: mixerShotPath, fullPage: true });
-  await tap(page, ".sheet-bar .close");
+  await tapAt(page, 200, 70);
   await page.waitForFunction(() => !document.querySelector("#sheet")?.classList.contains("open"));
 
-  await tap(page, '[data-action="open-export"]');
+  await tap(page, "#file-btn");
   await page.waitForFunction(() => document.querySelector(".sheet-bar .title")?.textContent === "Export");
   const exportText = await page.$eval("#sheet", (el) => el.textContent);
   assertState(exportText.includes("Download Project") && exportText.includes("Master WAV"), "export sheet missing grouped project/audio actions");
-  await tap(page, '[data-action="save-local-project"]');
+  await clickAction(page, "save-local-project");
   await page.waitForFunction(() => document.querySelector(".exp-status")?.textContent.includes("Local snapshot saved"));
   await page.evaluate(() => document.querySelector('[data-action="export-master-wav"]').click());
   await page.waitForFunction(() => document.querySelector(".exp-status")?.textContent.includes("Master exported"), { timeout: 20000 });
   await page.screenshot({ path: exportShotPath, fullPage: true });
-  await tap(page, ".sheet-bar .close");
+  await closeSheet(page);
   await page.waitForFunction(() => !document.querySelector("#sheet")?.classList.contains("open"));
 
   // The transport must actually advance — not merely flip the play button on.

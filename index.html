@@ -1076,8 +1076,41 @@
         font-weight: 600;
         color: var(--text);
       }
+      .tfbtn.accent {
+        color: #e8b84b;
+      }
       .tfbtn:active {
         background: #3a3a40;
+      }
+      @media (min-width: 720px) {
+        #transport {
+          justify-content: flex-start;
+        }
+        .ttempo {
+          flex: 0 0 auto;
+          margin-left: 12px;
+          margin-right: 0;
+        }
+        .tright {
+          margin-left: auto;
+        }
+        #footer {
+          display: flex;
+          justify-content: flex-start;
+          align-items: center;
+        }
+        .frow {
+          justify-content: flex-start;
+        }
+        .fspacer {
+          flex: 0 0 12px;
+        }
+        .swingctl {
+          margin-left: 4px;
+        }
+        #magic-btn {
+          margin-left: auto;
+        }
       }
     </style>
   </head>

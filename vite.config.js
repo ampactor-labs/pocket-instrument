@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 
-// esnext so top-level await (Pixi's async `app.init`) works. Modern mobile
-// browsers (Chrome 89+, Safari 15+) support it; this is a phone-first prototype.
+// Modern mobile browsers are the target; keep the bundle lean and skip legacy
+// transforms/polyfills for this phone-first prototype.
 export default defineConfig({
   base: "/noodles/",
   build: { target: "esnext" },

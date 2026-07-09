@@ -16,6 +16,8 @@ import {
   makeScene,
   cloneScene,
   arrangeLength,
+  noteSlot,
+  normalizeScene,
   scaleNotes,
   noteName,
   pcName,
@@ -26,6 +28,34 @@ import { createAudio, KIT_NAMES, HARMONY_PRESET_NAMES, BASS_PRESET_NAMES, MELODY
 
 // Pitch range shown in the piano roll, per track.
 const PIANO = { melody: { base: 60, rows: 15 }, bass: { base: 36, rows: 12 } };
+
+function setNoteSlot(lane, step, notes) {
+  const clean = notes
+    .filter((n) => n && Number.isFinite(Number(n.midi)))
+    .map((n) => ({
+      midi: Number(n.midi),
+      len: Math.max(1, Math.min(16, Number(n.len) || 1)),
+      vel: Math.max(0.05, Math.min(1, Number(n.vel) || 0.9)),
+    }));
+  lane[step] = clean.length ? clean : null;
+}
+
+function removeNoteFromSlot(lane, step, index) {
+  const notes = noteSlot(lane[step]).filter((_, i) => i !== index);
+  setNoteSlot(lane, step, notes);
+}
+
+function removePitchInRange(lane, midi, fromStep, toStep, exceptStep) {
+  for (let step = fromStep; step <= toStep; step++) {
+    if (step === exceptStep) continue;
+    const next = noteSlot(lane[step]).filter((n) => n.midi !== midi);
+    setNoteSlot(lane, step, next);
+  }
+}
+
+function slotPeakVel(slot) {
+  return noteSlot(slot).reduce((max, n) => Math.max(max, n.vel ?? 0.9), 0);
+}
 
 const hex = (n) => "#" + (n >>> 0).toString(16).padStart(6, "0");
 const chordHex = (ci) => hex(chordColor(ci));
@@ -59,6 +89,14 @@ function el(tag, props = {}, kids = []) {
   }
   for (const c of [].concat(kids)) if (c) e.appendChild(c);
   return e;
+}
+
+function capturePointer(node, pointerId) {
+  try {
+    node.setPointerCapture?.(pointerId);
+  } catch {
+    // Synthetic/mobile browser pointer streams can end before capture resolves.
+  }
 }
 
 let audioReady = false;
@@ -105,6 +143,7 @@ function refreshAll() {
 }
 function restoreSnap(s) {
   Object.assign(song, structuredClone(s));
+  song.scenes?.forEach(normalizeScene);
   selClip = null;
   refreshAll();
 }
@@ -133,26 +172,28 @@ let bpmEl;
 const TEMPO_MIN = 40;
 const TEMPO_MAX = 220;
 
+async function togglePlayback() {
+  await ensureStarted();
+  if (view === "arrangement") {
+    if (audio.playing) audio.stop();
+    else audio.playArrangement(arrPlayBar);
+  } else {
+    if (audio.playing) audio.stop();
+    else {
+      const sceneIndex = playingScene >= 0 ? playingScene : 0;
+      audio.launchScene(sceneIndex);
+      setPlaying(sceneIndex);
+    }
+  }
+  updatePlayBtn(audio.playing);
+}
+
 function renderTransport() {
   transport.innerHTML = "";
   playBtn = el("div", {
     class: "tbtn play",
     text: "▶",
-    onclick: async () => {
-      await ensureStarted();
-      if (view === "arrangement") {
-        if (audio.playing) audio.stop();
-        else audio.playArrangement(arrPlayBar);
-      } else {
-        if (audio.playing) audio.stop();
-        else {
-          const sceneIndex = playingScene >= 0 ? playingScene : 0;
-          audio.launchScene(sceneIndex);
-          setPlaying(sceneIndex);
-        }
-      }
-      updatePlayBtn(audio.playing);
-    },
+    onclick: togglePlayback,
   });
   bpmEl = el("div", { id: "bpm", role: "button", tabindex: "0", html: `${song.tempo}<small>BPM</small>` });
   bindTempoControl(bpmEl);
@@ -257,7 +298,7 @@ function generateMagicScene() {
   const melody = new Array(16).fill(null);
   for (let s = 0; s < 16; s++) {
     if (Math.random() < 0.3) {
-      melody[s] = { midi: ns[Math.floor(Math.random() * ns.length)], len: 1, vel: 0.7 + Math.random() * 0.3 };
+      melody[s] = [{ midi: ns[Math.floor(Math.random() * ns.length)], len: 1, vel: 0.7 + Math.random() * 0.3 }];
     }
   }
 
@@ -265,13 +306,103 @@ function generateMagicScene() {
   const bass = new Array(16).fill(null);
   for (let s = 0; s < 16; s += 4) {
     if (Math.random() < 0.8) {
-      bass[s] = { midi: bs[Math.floor(Math.random() * Math.min(bs.length, 5))], len: 4, vel: 0.9 };
+      bass[s] = [{ midi: bs[Math.floor(Math.random() * Math.min(bs.length, 5))], len: 4, vel: 0.9 }];
     }
   }
 
   const newScene = makeScene(harmony, drums, melody, bass);
   newScene.tag = "✨";
   song.scenes.push(newScene);
+}
+
+function emptyScene() {
+  return makeScene(
+    [0, 0, 0, 0],
+    Object.fromEntries(DRUM_VOICES.map((v) => [v, new Array(16).fill(false)])),
+    new Array(16).fill(null),
+    new Array(16).fill(null)
+  );
+}
+
+function insertSceneAt(index, scene) {
+  const at = Math.max(0, Math.min(song.scenes.length, index));
+  for (const track of ARRANGE_TRACKS) {
+    for (const clip of song.arrangement[track]) {
+      if (clip.scene >= at) clip.scene += 1;
+    }
+  }
+  song.scenes.splice(at, 0, scene);
+  return at;
+}
+
+function swapScenes(a, b) {
+  if (a === b || !song.scenes[a] || !song.scenes[b]) return;
+  const tmp = song.scenes[a];
+  song.scenes[a] = song.scenes[b];
+  song.scenes[b] = tmp;
+  for (const track of ARRANGE_TRACKS) {
+    for (const clip of song.arrangement[track]) {
+      if (clip.scene === a) clip.scene = b;
+      else if (clip.scene === b) clip.scene = a;
+    }
+  }
+}
+
+function deleteSceneAt(index) {
+  if (song.scenes.length <= 1 || !song.scenes[index]) return false;
+  song.scenes.splice(index, 1);
+  for (const track of ARRANGE_TRACKS) {
+    song.arrangement[track] = song.arrangement[track]
+      .filter((clip) => clip.scene !== index)
+      .map((clip) => ({ ...clip, scene: clip.scene > index ? clip.scene - 1 : clip.scene }));
+  }
+  if (playingScene === index) playingScene = -1;
+  else if (playingScene > index) playingScene -= 1;
+  for (const t of TRACKS) {
+    if (playingTracks[t.key] === index) playingTracks[t.key] = -1;
+    else if (playingTracks[t.key] > index) playingTracks[t.key] -= 1;
+    if (queuedSceneTracks[t.key] === index) queuedSceneTracks[t.key] = -1;
+    else if (queuedSceneTracks[t.key] > index) queuedSceneTracks[t.key] -= 1;
+  }
+  return true;
+}
+
+function openAddSceneSheet() {
+  editor = null;
+  cancelAnimationFrame(mixerRAF);
+  mixerRAF = 0;
+  sheet.innerHTML = "";
+  sheet.style.setProperty("--tc", "#e8b84b");
+  const baseIndex = playingScene >= 0 ? playingScene : song.scenes.length - 1;
+  const addScene = (scene) => {
+    pushUndo();
+    insertSceneAt(song.scenes.length, scene);
+    closeEditor();
+    renderSession();
+    if (view === "arrangement") renderArrangement();
+  };
+  sheet.appendChild(
+    el("div", { class: "sheet-bar" }, [
+      el("div", { class: "swatch" }),
+      el("div", { class: "title", text: "Add Scene" }),
+      el("div", { class: "sub", text: "blank · duplicate · magic" }),
+      el("div", { class: "close", text: "Done", onclick: closeEditor }),
+    ])
+  );
+  sheet.appendChild(
+    el("div", { class: "tfrow" }, [
+      el("div", { class: "tfbtn", text: "Blank", onclick: () => addScene(emptyScene()) }),
+      el("div", { class: "tfbtn", text: "Duplicate Current", onclick: () => addScene(cloneScene(song.scenes[baseIndex])) }),
+      el("div", { class: "tfbtn accent", text: "Magic", onclick: () => {
+        pushUndo();
+        generateMagicScene();
+        closeEditor();
+        renderSession();
+      } }),
+    ])
+  );
+  scrim.classList.add("open");
+  sheet.classList.add("open");
 }
 
 
@@ -320,7 +451,7 @@ function bindTempoControl(node) {
     let dragging = false;
     let changed = false;
     node.classList.add("dragging");
-    node.setPointerCapture?.(e.pointerId);
+    capturePointer(node, e.pointerId);
     const move = (ev) => {
       const dx = ev.clientX - startX;
       const dy = startY - ev.clientY;
@@ -407,8 +538,7 @@ function setKeyScale(key, scale) {
   for (const sc of song.scenes) {
     for (const trk of ["bass", "melody"]) {
       for (let s = 0; s < 16; s++) {
-        const n = sc[trk][s];
-        if (n) n.midi = snapToScale(n.midi + delta);
+        for (const n of noteSlot(sc[trk][s])) n.midi = snapToScale(n.midi + delta);
       }
     }
   }
@@ -438,8 +568,11 @@ function clipContent(scene, track) {
     if (!scene[track] || !scene[track].some(n => n !== null)) return null;
     const mini = el("div", { class: "mini" });
     const lane = scene[track];
-    for (let s = 0; s < 16; s++)
-      mini.appendChild(el("i", { style: `height:${lane[s] ? Math.round(4 + (lane[s].vel ?? 0.9) * 11) : 3}px` }));
+    for (let s = 0; s < 16; s++) {
+      const notes = noteSlot(lane[s]);
+      const height = notes.length ? Math.round(4 + slotPeakVel(lane[s]) * 9 + Math.min(4, notes.length - 1) * 2) : 3;
+      mini.appendChild(el("i", { style: `height:${height}px` }));
+    }
     return mini;
   }
   return null;
@@ -501,11 +634,13 @@ function beginClipDrag(origEv, clip, sceneIndex, track) {
   const rects = allSlots.map((sl) => ({ el: sl, rect: sl.getBoundingClientRect(), si: parseInt(sl.dataset.scene, 10) }));
   clip.style.opacity = "0.4";
   let targetSI = sceneIndex;
+  let moved = false;
   const move = (ev) => {
     const hit = rects.find((r) => ev.clientY >= r.rect.top && ev.clientY < r.rect.bottom);
     if (hit) {
       rects.forEach((r) => r.el.style.outline = "");
       hit.el.style.outline = "2px solid #e8b84b";
+      if (hit.si !== sceneIndex) moved = true;
       targetSI = hit.si;
     }
   };
@@ -530,6 +665,8 @@ function beginClipDrag(origEv, clip, sceneIndex, track) {
         dstScene.launch[track] = structuredClone(tl);
       }
       renderSession();
+    } else if (!moved) {
+      openClipProps(sceneIndex, track);
     }
   };
   document.addEventListener("pointermove", move, { passive: true });
@@ -599,35 +736,31 @@ function openSceneOptions(sceneIndex) {
       el("div", { class: "tfbtn", text: "Duplicate", onclick: () => {
         pushUndo();
         const cloned = cloneScene(scene);
-        song.scenes.splice(sceneIndex + 1, 0, cloned);
+        insertSceneAt(sceneIndex + 1, cloned);
         closeEditor();
         renderSession();
       }}),
       el("div", { class: "tfbtn", text: "Move Up", onclick: () => {
         if (sceneIndex === 0) return;
         pushUndo();
-        const tmp = song.scenes[sceneIndex - 1];
-        song.scenes[sceneIndex - 1] = song.scenes[sceneIndex];
-        song.scenes[sceneIndex] = tmp;
+        swapScenes(sceneIndex, sceneIndex - 1);
         closeEditor();
         renderSession();
       }}),
       el("div", { class: "tfbtn", text: "Move Down", onclick: () => {
         if (sceneIndex >= song.scenes.length - 1) return;
         pushUndo();
-        const tmp = song.scenes[sceneIndex + 1];
-        song.scenes[sceneIndex + 1] = song.scenes[sceneIndex];
-        song.scenes[sceneIndex] = tmp;
+        swapScenes(sceneIndex, sceneIndex + 1);
         closeEditor();
         renderSession();
       }}),
       el("div", { class: "tfbtn", style: "color:#d24b4b", text: "Delete", onclick: () => {
         if (song.scenes.length <= 1) { closeEditor(); return; }
         pushUndo();
-        song.scenes.splice(sceneIndex, 1);
-        if (playingScene >= song.scenes.length) playingScene = song.scenes.length - 1;
+        deleteSceneAt(sceneIndex);
         closeEditor();
         renderSession();
+        if (view === "arrangement") renderArrangement();
       }}),
     ])
   );
@@ -691,12 +824,7 @@ function renderSession() {
   const addSceneCell = el("div", {
     class: "scenecell scene-add-cell",
     title: "Add scene",
-    onclick: () => {
-      pushUndo();
-      const from = playingScene >= 0 ? playingScene : song.scenes.length - 1;
-      song.scenes.push(cloneScene(song.scenes[from]));
-      renderSession();
-    },
+    onclick: openAddSceneSheet,
   }, [el("div", { class: "tri", style: "color:#e8b84b;font-size:22px", text: "+" })]);
   grid.appendChild(addSceneCell);
   // fill remaining track cells in that last row with blank spacers
@@ -748,8 +876,27 @@ function applyQueued(qt) {
 const sheet = document.getElementById("sheet");
 const scrim = document.getElementById("scrim");
 let editor = null; // { scene, track, stepEls, cursor }
+let suppressOutsideClick = false;
 
 scrim.addEventListener("click", closeEditor);
+document.addEventListener("pointerdown", (e) => {
+  if (!sheet.classList.contains("open")) return;
+  if (sheet.contains(e.target)) return;
+  if (e.target.closest(".tbtn.play")) return;
+
+  closeEditor();
+  if (e.target.closest("#transport")) {
+    suppressOutsideClick = true;
+    e.preventDefault();
+    e.stopPropagation();
+  }
+}, true);
+document.addEventListener("click", (e) => {
+  if (!suppressOutsideClick) return;
+  suppressOutsideClick = false;
+  e.preventDefault();
+  e.stopPropagation();
+}, true);
 
 function openEditor(sceneIndex, track) {
   const scene = song.scenes[sceneIndex];
@@ -882,8 +1029,7 @@ function openClipProps(sceneIndex, track) {
         "data-action": "duplicate-scene",
         onclick: () => {
           pushUndo();
-          song.scenes.push(cloneScene(scene));
-          const next = song.scenes.length - 1;
+          const next = insertSceneAt(song.scenes.length, cloneScene(scene));
           renderSession();
           openClipProps(next, track);
         },
@@ -1294,7 +1440,7 @@ function buildDrumEditor(scene) {
       stepsArr[s0].classList.toggle("on", scene.drums[v][s0]);
       if (drumDragMode === "add") audio.previewHit(v);
       refreshClip(editor.scene, "drums");
-      steps.setPointerCapture?.(e.pointerId);
+      capturePointer(steps, e.pointerId);
     });
     steps.addEventListener("pointermove", (e) => {
       if (drumDragMode === null) return;
@@ -1360,17 +1506,17 @@ function buildPianoEditor(sceneIndex, scene, track) {
             for (let k = 0; k < 4; k++) {
               let midi = pcToMidi(ch.pcs[k % 3], cfg.base);
               if (k === 3) midi += 12;
-              lane[b * 4 + k] = { midi, len: 1, vel: 0.85 };
+              setNoteSlot(lane, b * 4 + k, [{ midi, len: 1, vel: 0.85 }]);
             }
           }
         }),
     }),
-    el("div", { class: "tfbtn", text: "Oct−", onclick: () => applyTf(() => { for (let s = 0; s < 16; s++) if (lane[s]) lane[s].midi -= 12; }) }),
-    el("div", { class: "tfbtn", text: "Oct+", onclick: () => applyTf(() => { for (let s = 0; s < 16; s++) if (lane[s]) lane[s].midi += 12; }) }),
+    el("div", { class: "tfbtn", text: "Oct−", onclick: () => applyTf(() => { for (let s = 0; s < 16; s++) for (const n of noteSlot(lane[s])) n.midi -= 12; }) }),
+    el("div", { class: "tfbtn", text: "Oct+", onclick: () => applyTf(() => { for (let s = 0; s < 16; s++) for (const n of noteSlot(lane[s])) n.midi += 12; }) }),
     el("div", {
       class: "tfbtn",
       text: "Humanize",
-      onclick: () => applyTf(() => { for (let s = 0; s < 16; s++) if (lane[s]) lane[s].vel = Math.max(0.4, Math.min(1, lane[s].vel + (Math.random() * 0.4 - 0.2))); }),
+      onclick: () => applyTf(() => { for (let s = 0; s < 16; s++) for (const n of noteSlot(lane[s])) n.vel = Math.max(0.4, Math.min(1, n.vel + (Math.random() * 0.4 - 0.2))); }),
     }),
     el("div", {
       class: "tfbtn",
@@ -1378,8 +1524,18 @@ function buildPianoEditor(sceneIndex, scene, track) {
       onclick: () =>
         applyTf(() => {
           const ns = scaleNotes(cfg.base, cfg.rows);
-          for (let s = 0; s < 16; s++)
-            lane[s] = Math.random() < 0.5 ? { midi: ns[Math.floor(Math.random() * ns.length)], len: 1, vel: 0.6 + Math.random() * 0.4 } : null;
+          for (let s = 0; s < 16; s++) {
+            if (Math.random() >= 0.5) {
+              lane[s] = null;
+              continue;
+            }
+            const count = track === "melody" && Math.random() < 0.22 ? 2 + Math.floor(Math.random() * 2) : 1;
+            const notes = [];
+            for (let i = 0; i < count; i++) {
+              notes.push({ midi: ns[Math.floor(Math.random() * ns.length)], len: 1, vel: 0.6 + Math.random() * 0.4 });
+            }
+            setNoteSlot(lane, s, notes);
+          }
         }),
     }),
     el("div", { class: "tfbtn", text: "Clear", onclick: () => applyTf(() => { for (let s = 0; s < 16; s++) lane[s] = null; }) }),
@@ -1390,12 +1546,17 @@ function buildPianoEditor(sceneIndex, scene, track) {
   const rowCells = []; // [rowIndex][step]
   const cursorCols = Array.from({ length: 16 }, () => []);
 
-  const noteStartAt = (step) => {
+  const noteAt = (step, midi = null) => {
     for (let st = 0; st < 16; st++) {
-      const n = lane[st];
-      if (n && step >= st && step < st + n.len) return st;
+      const notes = noteSlot(lane[st]);
+      for (let i = 0; i < notes.length; i++) {
+        const n = notes[i];
+        if (step >= st && step < st + n.len && (midi === null || n.midi === midi)) {
+          return { step: st, index: i, note: n };
+        }
+      }
     }
-    return -1;
+    return null;
   };
 
   rows.forEach((midi, ri) => {
@@ -1436,15 +1597,14 @@ function buildPianoEditor(sceneIndex, scene, track) {
   function paint() {
     rows.forEach((midi, ri) => {
       for (let s = 0; s < 16; s++) {
-        const st = noteStartAt(s);
-        const on = st >= 0 && lane[st].midi === midi;
-        rowCells[ri][s].className = `pcell${Math.floor(s / 4) % 2 ? "" : " g"}${on ? " on" : ""}${on && st === s ? " nstart" : ""}`;
+        const hit = noteAt(s, midi);
+        rowCells[ri][s].className = `pcell${Math.floor(s / 4) % 2 ? "" : " g"}${hit ? " on" : ""}${hit && hit.step === s ? " nstart" : ""}`;
       }
     });
     for (let s = 0; s < 16; s++) {
-      const n = lane[s];
-      vbars[s].style.height = n ? Math.round(n.vel * 100) + "%" : "0%";
-      vbars[s].parentElement.style.opacity = n ? 1 : 0.3;
+      const notes = noteSlot(lane[s]);
+      vbars[s].style.height = notes.length ? Math.round(slotPeakVel(lane[s]) * 100) + "%" : "0%";
+      vbars[s].parentElement.style.opacity = notes.length ? 1 : 0.3;
     }
   }
 
@@ -1452,24 +1612,24 @@ function buildPianoEditor(sceneIndex, scene, track) {
     e.preventDefault();
     await ensureStarted();
     pushUndo();
-    const startHere = lane[s] && lane[s].midi === midi ? s : -1;
-    if (startHere < 0) {
-      const occ = noteStartAt(s);
-      if (occ >= 0) lane[occ] = null;
-      lane[s] = { midi, len: 1, vel: lane[s]?.vel ?? 0.9 };
+    const existing = noteAt(s, midi);
+    const start = existing?.step ?? s;
+    const note = existing?.note ?? { midi, len: 1, vel: slotPeakVel(lane[s]) || 0.9 };
+    if (!existing) {
+      setNoteSlot(lane, s, [...noteSlot(lane[s]), note]);
       audio.previewNote(track, midi);
     }
     paint();
     let moved = false;
     const rect = cell.parentElement.getBoundingClientRect();
     const cw = rect.width / 16;
-    cell.setPointerCapture?.(e.pointerId);
+    capturePointer(cell, e.pointerId);
     const move = (ev) => {
-      const cur = Math.max(s, Math.min(15, Math.floor((ev.clientX - rect.left) / cw)));
-      const len = cur - s + 1;
-      if (lane[s] && len !== lane[s].len) {
-        for (let i = s + 1; i < s + len && i < 16; i++) if (lane[i]) lane[i] = null;
-        lane[s].len = len;
+      const cur = Math.max(start, Math.min(15, Math.floor((ev.clientX - rect.left) / cw)));
+      const len = cur - start + 1;
+      if (len !== note.len) {
+        removePitchInRange(lane, midi, start + 1, Math.min(15, start + len - 1), start);
+        note.len = len;
         moved = true;
         paint();
       }
@@ -1477,8 +1637,8 @@ function buildPianoEditor(sceneIndex, scene, track) {
     const up = () => {
       cell.removeEventListener("pointermove", move);
       cell.removeEventListener("pointerup", up);
-      if (!moved && startHere === s) {
-        lane[s] = null; // tap on a note's start removes it
+      if (!moved && existing) {
+        removeNoteFromSlot(lane, existing.step, existing.index);
         paint();
       }
       refreshClip(sceneIndex, track);
@@ -1489,16 +1649,17 @@ function buildPianoEditor(sceneIndex, scene, track) {
 
   async function onVelDown(e, s, bar) {
     e.preventDefault();
-    if (!lane[s]) return;
+    if (!noteSlot(lane[s]).length) return;
     await ensureStarted();
     pushUndo();
     const rect = bar.getBoundingClientRect();
     const set = (ev) => {
-      lane[s].vel = Math.max(0.05, Math.min(1, 1 - (ev.clientY - rect.top) / rect.height));
+      const vel = Math.max(0.05, Math.min(1, 1 - (ev.clientY - rect.top) / rect.height));
+      for (const n of noteSlot(lane[s])) n.vel = vel;
       paint();
     };
     set(e);
-    bar.setPointerCapture?.(e.pointerId);
+    capturePointer(bar, e.pointerId);
     const move = (ev) => set(ev);
     const up = () => {
       bar.removeEventListener("pointermove", move);
@@ -1559,8 +1720,14 @@ function refreshClip(sceneIndex, track) {
   const clip = refs.clips[track];
   const content = clipContent(song.scenes[sceneIndex], track);
   clip.innerHTML = "";
+  clip.classList.toggle("filled", content !== null);
+  clip.classList.toggle("empty", content === null);
+  if (!content) {
+    clip.textContent = "+";
+    return;
+  }
   clip.appendChild(el("div", { class: "tri", text: "▶" }));
-  if (content) clip.appendChild(content);
+  clip.appendChild(content);
   const badge = launchBadge(song.scenes[sceneIndex], track);
   if (badge) clip.appendChild(badge);
 }
@@ -1586,8 +1753,11 @@ function arrMini(scene, track) {
   }
   const lane = scene[track];
   const mini = el("div", { class: "cmini" });
-  for (let s = 0; s < 16; s++)
-    mini.appendChild(el("i", { style: `height:${lane[s] ? Math.round(3 + (lane[s].vel ?? 0.9) * 9) : 3}px` }));
+  for (let s = 0; s < 16; s++) {
+    const notes = noteSlot(lane[s]);
+    const height = notes.length ? Math.round(3 + slotPeakVel(lane[s]) * 7 + Math.min(4, notes.length - 1) * 2) : 3;
+    mini.appendChild(el("i", { style: `height:${height}px` }));
+  }
   return mini;
 }
 
@@ -1717,7 +1887,7 @@ async function onClipDown(e, track, idx, cl, rz) {
   let targetTrack = track;
   const pre = snapshot();
   let changed = false;
-  cl.setPointerCapture?.(e.pointerId);
+  capturePointer(cl, e.pointerId);
   const move = (ev) => {
     changed = true;
     const dBars = (ev.clientX - startX) / ppb;
@@ -1760,7 +1930,7 @@ function onLoopDown(e) {
   const ol = loop.len;
   let moved = false;
   const brace = e.currentTarget;
-  brace.setPointerCapture?.(e.pointerId);
+  capturePointer(brace, e.pointerId);
   const move = (ev) => {
     const d = Math.round((ev.clientX - startX) / ppb);
     if (d !== 0) moved = true;
@@ -1964,6 +2134,7 @@ function applyProject(rawProject) {
   if (!nextSong || !Array.isArray(nextSong.scenes) || !nextSong.scenes.length) {
     throw new Error("Not a valid Noodles project.");
   }
+  nextSong.scenes.forEach(normalizeScene);
   if (!nextSong.arrangement) nextSong.arrangement = {};
   for (const t of TRACKS) if (!Array.isArray(nextSong.arrangement[t.key])) nextSong.arrangement[t.key] = [];
   if (!nextSong.loop) nextSong.loop = { on: false, start: 0, len: 4 };
@@ -2117,4 +2288,12 @@ document.addEventListener("visibilitychange", () => {
     audio.stop();
     updatePlayBtn(false);
   }
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.code !== "Space" || e.repeat) return;
+  const tag = e.target?.tagName;
+  if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA" || e.target?.isContentEditable) return;
+  e.preventDefault();
+  togglePlayback();
 });

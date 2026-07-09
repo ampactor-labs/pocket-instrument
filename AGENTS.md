@@ -89,8 +89,8 @@ Scene = {
   tag: "A",
   harmony: [degreeIdx × 4],                 // index 0..6 into CHORDS, one chord per bar
   drums:   { kick:[bool×16], snare, hat, clap },
-  melody:  [ {midi,len,vel} | null × 16 ],  // monophonic step line, one note per 16th
-  bass:    [ {midi,len,vel} | null × 16 ],
+  melody:  [ [{midi,len,vel}...] | null × 16 ],  // scale-snapped note stacks
+  bass:    [ [{midi,len,vel}...] | null × 16 ],
 }
 Clip = { scene: sceneIndex, start: bar, len: bars }   // references a scene's clip for that track
 ```

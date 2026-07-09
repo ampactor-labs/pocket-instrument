@@ -49,7 +49,7 @@ export function setScaleContext(key, scaleName) {
 }
 setScaleContext(0, "major");
 
-// hsl → 0xRRGGBB for Pixi.
+// hsl -> 0xRRGGBB for CSS hex conversion.
 export function hslInt(h, s, l) {
   s /= 100;
   l /= 100;
@@ -127,6 +127,32 @@ export const DRUM_META = {
   clap: { label: "clap", hue: 276, sat: 52, light: 72 },
 };
 
+export function cloneNoteSlot(slot) {
+  if (!slot) return null;
+  const notes = (Array.isArray(slot) ? slot : [slot])
+    .filter((n) => n && Number.isFinite(Number(n.midi)))
+    .map((n) => ({
+      midi: Number(n.midi),
+      len: Math.max(1, Math.min(16, Number(n.len) || 1)),
+      vel: Math.max(0.05, Math.min(1, Number(n.vel) || 0.9)),
+    }));
+  return notes.length ? notes : null;
+}
+
+export function noteSlot(slot) {
+  return Array.isArray(slot) ? slot : slot ? [slot] : [];
+}
+
+export function normalizeNoteLane(lane = null) {
+  return Array.from({ length: 16 }, (_, i) => cloneNoteSlot(lane?.[i]));
+}
+
+export function normalizeScene(scene) {
+  scene.melody = normalizeNoteLane(scene.melody);
+  scene.bass = normalizeNoteLane(scene.bass);
+  return scene;
+}
+
 const steps16 = (idx) => {
   const a = new Array(16).fill(false);
   for (const i of idx) a[i] = true;
@@ -145,10 +171,10 @@ export function makeScene(harmony, drums, melody = null, bass = null) {
     drums: Object.fromEntries(
       DRUM_VOICES.map((v) => [v, (drums[v] || new Array(16).fill(false)).slice()])
     ),
-    // Bass and melody: one note (or null) per 16th step — a monophonic step
-    // line, scale-snapped by the editor. Each note is { midi, len, vel }.
-    melody: (melody || new Array(16).fill(null)).map((n) => (n ? { ...n } : null)),
-    bass: (bass || new Array(16).fill(null)).map((n) => (n ? { ...n } : null)),
+    // Bass and melody: per-step note stacks (or null) for scale-snapped chords.
+    // Each note is { midi, len, vel }; old single-note slots normalize to stacks.
+    melody: normalizeNoteLane(melody),
+    bass: normalizeNoteLane(bass),
   };
   scene.launch = cloneLaunch();
   return scene;
@@ -242,7 +268,7 @@ export function clipLaunch(scene, track) {
 }
 
 export function clipLengthBars(scene, track) {
-  return track === "harmony" ? scene.harmony.length : 1;
+  return track === "harmony" ? Math.max(1, scene.harmony.length) : 1;
 }
 
 export function makeSong() {

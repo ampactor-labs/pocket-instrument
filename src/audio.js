@@ -3,7 +3,7 @@
 // velocity, and a transport that loops a Scene or plays the Arrangement.
 
 import * as Tone from "tone";
-import { CHORDS, DRUM_VOICES, voiceLead, clipAt, arrangeLength, clipLaunch, clipLengthBars } from "./model.js";
+import { CHORDS, DRUM_VOICES, voiceLead, clipAt, arrangeLength, clipLaunch, clipLengthBars, noteSlot } from "./model.js";
 
 const midiToFreq = (m) => Tone.Frequency(m, "midi").toFrequency();
 const sixteenth = () => Tone.Time("16n").toSeconds();
@@ -150,13 +150,15 @@ export function createAudio(song) {
 
   // Bass + lead — device params live-adjustable.
   const bassFilter = new Tone.Filter({ type: "lowpass", frequency: 750, Q: 0.9 }).connect(channels.bass);
-  const bassTrk = new Tone.Synth({
+  const bassTrk = new Tone.PolySynth(Tone.Synth, {
+    maxPolyphony: 6,
     oscillator: { type: "sawtooth" },
     envelope: { attack: 0.02, decay: 0.2, sustain: 0.6, release: 0.25 },
     volume: -10,
   }).connect(bassFilter);
   const leadFilter = new Tone.Filter({ type: "lowpass", frequency: 3200, Q: 0.6 }).connect(channels.melody);
-  const lead = new Tone.Synth({
+  const lead = new Tone.PolySynth(Tone.Synth, {
+    maxPolyphony: 8,
     oscillator: { type: "triangle" },
     envelope: { attack: 0.01, decay: 0.16, sustain: 0.35, release: 0.3 },
     volume: -14,
@@ -210,10 +212,13 @@ export function createAudio(song) {
     halo.triggerAttackRelease(midiToFreq(Math.max(...voiced) + 12), "1n", time);
     sub.triggerAttackRelease(midiToFreq(36 + CHORDS[ci].pcs[0]), "1n", time);
   }
-  const playLead = (n, time) =>
-    lead.triggerAttackRelease(midiToFreq(n.midi), sixteenth() * (n.len || 1), time, n.vel ?? 0.9);
-  const playBass = (n, time) =>
-    bassTrk.triggerAttackRelease(midiToFreq(n.midi), sixteenth() * (n.len || 1) * 1.1, time, n.vel ?? 0.95);
+  function playNoteStack(track, slot, time) {
+    const synth = track === "bass" ? bassTrk : lead;
+    const stretch = track === "bass" ? 1.1 : 1;
+    for (const n of noteSlot(slot)) {
+      synth.triggerAttackRelease(midiToFreq(n.midi), sixteenth() * (n.len || 1) * stretch, time, n.vel ?? 0.9);
+    }
+  }
   function hitDrum(v, time) {
     if (v === "kick") kick.triggerAttackRelease("C1", "8n", time);
     else if (v === "snare") snare.triggerAttackRelease("16n", time);
@@ -247,9 +252,11 @@ export function createAudio(song) {
       const h = clipAt(song, "harmony", bar);
       if (h) {
         const sc = song.scenes[h.scene];
-        const ci = sc.harmony[(bar - h.start) % sc.harmony.length];
-        playChord(ci, time);
-        draw.schedule(() => visualCb({ type: "arrchord", bar, chord: ci }), time);
+        if (sc?.harmony?.length) {
+          const ci = sc.harmony[(bar - h.start) % sc.harmony.length];
+          playChord(ci, time);
+          draw.schedule(() => visualCb({ type: "arrchord", bar, chord: ci }), time);
+        }
       }
     }
     const d = clipAt(song, "drums", bar);
@@ -260,8 +267,7 @@ export function createAudio(song) {
     for (const trk of ["bass", "melody"]) {
       const c = clipAt(song, trk, bar);
       if (c) {
-        const n = song.scenes[c.scene][trk][stepInBar];
-        if (n) (trk === "bass" ? playBass : playLead)(n, time);
+        playNoteStack(trk, song.scenes[c.scene][trk][stepInBar], time);
       }
     }
     draw.schedule(() => visualCb({ type: "arr", bar, stepInBar, len }), time);
@@ -361,7 +367,7 @@ export function createAudio(song) {
     const harmonyScene = harmonyState.active ? song.scenes[harmonyState.scene] : null;
     let visualStep = 0;
     let visualBar = 0;
-    if (harmonyScene) {
+    if (harmonyScene?.harmony?.length) {
       const stepInBar = harmonyState.step % 16;
       const bar = Math.floor(harmonyState.step / 16) % harmonyScene.harmony.length;
       visualStep = stepInBar;
@@ -390,8 +396,7 @@ export function createAudio(song) {
       const scene = st.active ? song.scenes[st.scene] : null;
       if (!scene) continue;
       const stepInBar = st.step % 16;
-      const n = scene[track][stepInBar];
-      if (n) (track === "bass" ? playBass : playLead)(n, time);
+      playNoteStack(track, scene[track][stepInBar], time);
     }
 
     for (const track of TRACK_KEYS) advanceSceneTrack(track);
@@ -492,7 +497,7 @@ export function createAudio(song) {
       hitDrum(v, Tone.now());
     },
     previewNote(track, midi) {
-      (track === "bass" ? playBass : playLead)({ midi, len: 1, vel: 0.9 }, Tone.now());
+      playNoteStack(track, [{ midi, len: 1, vel: 0.9 }], Tone.now());
     },
     // --- mixer ---
     setVol(track, db) {
@@ -586,9 +591,9 @@ export function createAudio(song) {
         const offHalo = new Tone.Synth({ oscillator: { type: "sine" }, envelope: { attack: 0.9, decay: 1, sustain: 0.5, release: 1.6 }, volume: -26 }).connect(offCh.harmony);
         const offSub = new Tone.Synth({ oscillator: { type: "sine" }, envelope: { attack: 0.08, decay: 0.4, sustain: 0.85, release: 1.6 }, volume: -13 }).connect(offCh.harmony);
         const offBF = new Tone.Filter({ type: "lowpass", frequency: 750, Q: 0.9 }).connect(offCh.bass);
-        const offBass = new Tone.Synth({ oscillator: { type: "sawtooth" }, envelope: { attack: 0.02, decay: 0.2, sustain: 0.6, release: 0.25 }, volume: -10 }).connect(offBF);
+        const offBass = new Tone.PolySynth(Tone.Synth, { maxPolyphony: 6, oscillator: { type: "sawtooth" }, envelope: { attack: 0.02, decay: 0.2, sustain: 0.6, release: 0.25 }, volume: -10 }).connect(offBF);
         const offLF = new Tone.Filter({ type: "lowpass", frequency: 3200, Q: 0.6 }).connect(offCh.melody);
-        const offLead = new Tone.Synth({ oscillator: { type: "triangle" }, envelope: { attack: 0.01, decay: 0.16, sustain: 0.35, release: 0.3 }, volume: -14 }).connect(offLF);
+        const offLead = new Tone.PolySynth(Tone.Synth, { maxPolyphony: 8, oscillator: { type: "triangle" }, envelope: { attack: 0.01, decay: 0.16, sustain: 0.35, release: 0.3 }, volume: -14 }).connect(offLF);
         const offKick = new Tone.MembraneSynth({ volume: -2 }).connect(offCh.drums);
         const offSnF = new Tone.Filter({ type: "highpass", frequency: 1400 }).connect(offCh.drums);
         const offSnare = new Tone.NoiseSynth({ noise: { type: "white" }, volume: -10 }).connect(offSnF);
@@ -605,13 +610,28 @@ export function createAudio(song) {
           const sib = step % 16;
           if (sib === 0) {
             const h = clipAt(song, "harmony", bar);
-            if (h) { const sc = song.scenes[h.scene]; const ci = sc.harmony[(bar - h.start) % sc.harmony.length]; const v = voiceLead(CHORDS[ci].pcs, offPrev); offPrev = v; offPad.triggerAttackRelease(v.map(midiToFreq), "1n", time); offHalo.triggerAttackRelease(midiToFreq(Math.max(...v) + 12), "1n", time); offSub.triggerAttackRelease(midiToFreq(36 + CHORDS[ci].pcs[0]), "1n", time); }
+            if (h) {
+              const sc = song.scenes[h.scene];
+              if (sc?.harmony?.length) {
+                const ci = sc.harmony[(bar - h.start) % sc.harmony.length];
+                const v = voiceLead(CHORDS[ci].pcs, offPrev);
+                offPrev = v;
+                offPad.triggerAttackRelease(v.map(midiToFreq), "1n", time);
+                offHalo.triggerAttackRelease(midiToFreq(Math.max(...v) + 12), "1n", time);
+                offSub.triggerAttackRelease(midiToFreq(36 + CHORDS[ci].pcs[0]), "1n", time);
+              }
+            }
           }
           const d = clipAt(song, "drums", bar);
           if (d) { const sc = song.scenes[d.scene]; for (const v of DRUM_VOICES) if (sc.drums[v][sib]) { if (v === "kick") offKick.triggerAttackRelease("C1", "8n", time); else if (v === "snare") offSnare.triggerAttackRelease("16n", time); else if (v === "clap") offClap.triggerAttackRelease("16n", time); else offHat.triggerAttackRelease("32n", time); } }
           for (const trk of ["bass", "melody"]) {
             const c = clipAt(song, trk, bar);
-            if (c) { const n = song.scenes[c.scene][trk][sib]; if (n) { const synth = trk === "bass" ? offBass : offLead; synth.triggerAttackRelease(midiToFreq(n.midi), offSix() * (n.len || 1), time, n.vel ?? 0.9); } }
+            if (c) {
+              const synth = trk === "bass" ? offBass : offLead;
+              for (const n of noteSlot(song.scenes[c.scene][trk][sib])) {
+                synth.triggerAttackRelease(midiToFreq(n.midi), offSix() * (n.len || 1) * (trk === "bass" ? 1.1 : 1), time, n.vel ?? 0.9);
+              }
+            }
           }
           step++;
         }, "16n");
