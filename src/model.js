@@ -147,9 +147,21 @@ export function normalizeNoteLane(lane = null) {
   return Array.from({ length: 16 }, (_, i) => cloneNoteSlot(lane?.[i]));
 }
 
+// Drum steps are velocities (0 = off). Old projects stored booleans; coerce.
+export function normalizeDrumLane(lane = null) {
+  return Array.from({ length: 16 }, (_, i) => {
+    const v = lane?.[i];
+    if (v === true) return 0.9;
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? Math.max(0.05, Math.min(1, n)) : 0;
+  });
+}
+
 export function normalizeScene(scene) {
   scene.melody = normalizeNoteLane(scene.melody);
   scene.bass = normalizeNoteLane(scene.bass);
+  const drums = scene.drums || {};
+  scene.drums = Object.fromEntries(DRUM_VOICES.map((v) => [v, normalizeDrumLane(drums[v])]));
   return scene;
 }
 
@@ -162,9 +174,7 @@ export function makeScene(harmony, drums, melody = null, bass = null) {
   const scene = {
     tag,
     harmony: harmony.slice(),
-    drums: Object.fromEntries(
-      DRUM_VOICES.map((v) => [v, (drums[v] || new Array(16).fill(false)).slice()])
-    ),
+    drums: Object.fromEntries(DRUM_VOICES.map((v) => [v, normalizeDrumLane(drums[v])])),
     // Bass and melody: per-step note stacks (or null) for scale-snapped chords.
     // Each note is { midi, len, vel }; old single-note slots normalize to stacks.
     melody: normalizeNoteLane(melody),
@@ -182,17 +192,21 @@ export function makeMagicScene() {
   const dens = { kick: 0.32, snare: 0.14, hat: 0.5, clap: 0.12 };
   const drums = {};
   for (const v of DRUM_VOICES) {
-    drums[v] = new Array(16).fill(false);
+    drums[v] = new Array(16).fill(0);
     for (let s = 0; s < 16; s++) {
       if (v === "kick" && s % 2 !== 0 && Math.random() > 0.1) continue;
       if (v === "snare" && s % 4 !== 0) continue;
-      drums[v][s] = Math.random() < dens[v];
+      if (Math.random() >= dens[v]) continue;
+      // Velocity shapes the groove: offbeat hats accented, everything else a
+      // touch under the anchors so the backbone stays in front.
+      if (v === "hat") drums[v][s] = (s % 4 === 2 ? 0.85 : 0.55) + Math.random() * 0.15;
+      else drums[v][s] = 0.6 + Math.random() * 0.25;
     }
   }
-  drums.kick[0] = true;
-  drums.kick[8] = true;
-  drums.snare[4] = true;
-  drums.snare[12] = true;
+  drums.kick[0] = 0.95;
+  drums.kick[8] = 0.9;
+  drums.snare[4] = 0.9;
+  drums.snare[12] = 0.9;
 
   const harmony = Array.from({ length: 4 }, () => Math.floor(Math.random() * 7));
 
