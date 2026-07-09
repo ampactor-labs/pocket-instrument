@@ -277,14 +277,14 @@ export function createAudio(song) {
       synth.triggerAttackRelease(midiToFreq(n.midi), sixteenth() * (n.len || 1) * stretch, time, n.vel ?? 0.9);
     }
   }
-  function hitDrum(v, time) {
+  function hitDrum(v, time, vel = 0.9) {
     if (v === "kick") {
       scheduleKickDuck(musicDuck.gain, time);
-      kick.triggerAttackRelease("C1", "8n", time);
+      kick.triggerAttackRelease("C1", "8n", time, vel);
     }
-    else if (v === "snare") snare.triggerAttackRelease("16n", time);
-    else if (v === "clap") clap.triggerAttackRelease("16n", time);
-    else hat.triggerAttackRelease("32n", time);
+    else if (v === "snare") snare.triggerAttackRelease("16n", time, vel);
+    else if (v === "clap") clap.triggerAttackRelease("16n", time, vel);
+    else hat.triggerAttackRelease("32n", time, vel);
   }
   function preview(ci) {
     const voiced = voiceLead(CHORDS[ci].pcs, prevVoiced);
@@ -323,7 +323,7 @@ export function createAudio(song) {
     const d = clipAt(song, "drums", bar);
     if (d) {
       const sc = song.scenes[d.scene];
-      for (const v of DRUM_VOICES) if (sc.drums[v][stepInBar]) hitDrum(v, time);
+      for (const v of DRUM_VOICES) if (sc.drums[v][stepInBar] > 0) hitDrum(v, time, sc.drums[v][stepInBar]);
     }
     for (const trk of ["bass", "melody"]) {
       const c = clipAt(song, trk, bar);
@@ -460,8 +460,8 @@ export function createAudio(song) {
     if (drumScene) {
       const stepInBar = drumState.step % 16;
       for (const v of DRUM_VOICES) {
-        if (drumScene.drums[v][stepInBar]) {
-          hitDrum(v, time);
+        if (drumScene.drums[v][stepInBar] > 0) {
+          hitDrum(v, time, drumScene.drums[v][stepInBar]);
           draw.schedule(() => visualCb({ type: "hit", scene: drumState.scene, voice: v, step: stepInBar, activeScenes: activeBefore }), time);
         }
       }
@@ -758,7 +758,7 @@ export function createAudio(song) {
           if (d) { 
             const sc = song.scenes[d.scene]; 
             for (const v of DRUM_VOICES) {
-              if (sc.drums[v][sib]) { 
+              if (sc.drums[v][sib] > 0) { 
                 const kParams = KITS[kitName];
                 if (v === "kick") {
                   scheduleKickDuck(offDuckGain.gain, time);

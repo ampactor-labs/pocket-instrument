@@ -1427,15 +1427,15 @@ function buildDrumEditor(scene) {
         const dens = { kick: 0.32, snare: 0.14, hat: 0.5, clap: 0.12 };
         for (const v of DRUM_VOICES) {
           for (let s = 0; s < 16; s++) {
-            if (v === "kick" && s % 2 !== 0 && Math.random() > 0.1) { scene.drums[v][s] = false; continue; }
-            if (v === "snare" && s % 4 !== 0) { scene.drums[v][s] = false; continue; }
-            scene.drums[v][s] = Math.random() < dens[v];
+            if (v === "kick" && s % 2 !== 0 && Math.random() > 0.1) { scene.drums[v][s] = 0; continue; }
+            if (v === "snare" && s % 4 !== 0) { scene.drums[v][s] = 0; continue; }
+            scene.drums[v][s] = Math.random() < dens[v] ? 0.7 + Math.random() * 0.3 : 0;
           }
         }
-        scene.drums.kick[0] = true;
-        scene.drums.kick[8] = true;
-        scene.drums.snare[4] = true;
-        scene.drums.snare[12] = true;
+        scene.drums.kick[0] = 0.9;
+        scene.drums.kick[8] = 0.9;
+        scene.drums.snare[4] = 0.9;
+        scene.drums.snare[12] = 0.9;
         openEditor(editor.scene, "drums");
         refreshClip(editor.scene, "drums");
       },
@@ -1445,7 +1445,7 @@ function buildDrumEditor(scene) {
       text: "Clear",
       onclick: () => {
         pushUndo();
-        for (const v of DRUM_VOICES) for (let s = 0; s < 16; s++) scene.drums[v][s] = false;
+        for (const v of DRUM_VOICES) for (let s = 0; s < 16; s++) scene.drums[v][s] = 0;
         openEditor(editor.scene, "drums");
         refreshClip(editor.scene, "drums");
       },
@@ -1486,22 +1486,24 @@ function buildDrumEditor(scene) {
       await ensureStarted();
       drumDragPre = snapshot();
       const s0 = stepAtX(e.clientX);
-      // If cell is on → delete mode; if off → add mode
-      drumDragMode = scene.drums[v][s0] ? "delete" : "add";
-      scene.drums[v][s0] = drumDragMode === "add";
-      stepsArr[s0].classList.toggle("on", scene.drums[v][s0]);
+      drumDragMode = scene.drums[v][s0] > 0 ? "delete" : "add";
+      scene.drums[v][s0] = drumDragMode === "add" ? 0.9 : 0;
+      stepsArr[s0].classList.toggle("on", scene.drums[v][s0] > 0);
       if (drumDragMode === "add") audio.previewHit(v);
       refreshClip(editor.scene, "drums");
+      if (typeof paintDrums === "function") paintDrums();
       capturePointer(steps, e.pointerId);
     });
     steps.addEventListener("pointermove", (e) => {
       if (drumDragMode === null) return;
       const s = stepAtX(e.clientX);
       const shouldOn = drumDragMode === "add";
-      if (scene.drums[v][s] !== shouldOn) {
-        scene.drums[v][s] = shouldOn;
+      const isOn = scene.drums[v][s] > 0;
+      if (isOn !== shouldOn) {
+        scene.drums[v][s] = shouldOn ? 0.9 : 0;
         stepsArr[s].classList.toggle("on", shouldOn);
         refreshClip(editor.scene, "drums");
+        if (typeof paintDrums === "function") paintDrums();
       }
     });
     steps.addEventListener("pointerup", () => {
@@ -1526,6 +1528,61 @@ function buildDrumEditor(scene) {
     scrollContainer.appendChild(el("div", { class: "drumrow" }, [pad, steps]));
   }
   sheet.appendChild(scrollContainer);
+
+  const vlane = el("div", { class: "vlane" });
+  const vbars = [];
+  vlane.appendChild(el("div", { class: "vkey", text: "vel" }));
+  const vsteps = el("div", { class: "vsteps" });
+  for (let s = 0; s < 16; s++) {
+    const fill = el("i", { style: `--tc:${trackColor("drums")}` });
+    const bar = el("div", { class: "vbar" }, [fill]);
+    bar.addEventListener("pointerdown", (e) => onDrumVelDown(e, s, bar));
+    vbars.push(fill);
+    vsteps.appendChild(bar);
+  }
+  vlane.appendChild(vsteps);
+  sheet.appendChild(vlane);
+
+  function paintDrums() {
+    for (let s = 0; s < 16; s++) {
+      let maxVel = 0;
+      for (const v of DRUM_VOICES) {
+        if (scene.drums[v][s] > maxVel) maxVel = scene.drums[v][s];
+      }
+      vbars[s].style.height = maxVel > 0 ? Math.round(maxVel * 100) + "%" : "0%";
+      vbars[s].parentElement.style.opacity = maxVel > 0 ? 1 : 0.3;
+    }
+  }
+
+  async function onDrumVelDown(e, s, bar) {
+    e.preventDefault();
+    let hasNotes = false;
+    for (const v of DRUM_VOICES) if (scene.drums[v][s] > 0) hasNotes = true;
+    if (!hasNotes) return;
+    await ensureStarted();
+    pushUndo();
+    const rect = bar.getBoundingClientRect();
+    const set = (ev) => {
+      const vel = Math.max(0.05, Math.min(1, 1 - (ev.clientY - rect.top) / rect.height));
+      for (const v of DRUM_VOICES) {
+        if (scene.drums[v][s] > 0) scene.drums[v][s] = vel;
+      }
+      paintDrums();
+    };
+    set(e);
+    capturePointer(bar, e.pointerId);
+    const move = (ev) => set(ev);
+    const up = () => {
+      bar.removeEventListener("pointermove", move);
+      bar.removeEventListener("pointerup", up);
+      refreshClip(editor.scene, "drums");
+    };
+    bar.addEventListener("pointermove", move);
+    bar.addEventListener("pointerup", up);
+  }
+
+  paintDrums();
+
   editor.stepEls = stepEls;
   editor.cursorCols = Array.from({ length: 16 }, (_, s) => DRUM_VOICES.map((v) => stepEls[v][s]));
 }
