@@ -31,7 +31,7 @@ const SOURCE_LEVEL_DB = {
   clap: 3,
 };
 const KICK_DUCK_GAIN = Tone.dbToGain(-12);
-const DRUM_PARALLEL_GAIN = Tone.dbToGain(-10);
+const DRUM_PARALLEL_GAIN = Tone.dbToGain(-8);
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // The send knobs sweep -30..0 dB; the bottom of the range is "off".
 const sendGain = (db) => (db <= -29 ? 0 : Tone.dbToGain(db));
@@ -120,7 +120,7 @@ function buildGraph({ meters = false } = {}) {
   g.glue = new Tone.Compressor({ threshold: -20, ratio: 4, attack: 0.03, release: 0.25, knee: 12 }).connect(g.makeupGain);
   g.softClip = new Tone.WaveShaper((x) => Math.tanh(x * 1.2) / Math.tanh(1.2), 2048).connect(g.glue);
   g.saturation = new Tone.Distortion(0.08).connect(g.softClip);
-  g.saturation.wet.value = 0.25;
+  g.saturation.wet.value = 0.32;
   g.master = new Tone.Gain(Tone.dbToGain(-3)).connect(g.saturation);
 
   // Sends. Algorithmic (Freeverb) instead of convolution — far cheaper per
