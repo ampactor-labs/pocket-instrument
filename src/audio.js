@@ -15,13 +15,13 @@ const SEND_OFF_DB = -60;
 const FIRST_PLAY_WARMUP_MS = 400;
 const PLAY_START_LEAD_TIME = "+0.18";
 const SOURCE_LEVEL_DB = {
-  harmonyPad: -8,
-  harmonyHalo: -22,
-  harmonyRoot: -28,
-  bass: -4,
-  melody: -2,
-  kick: -4,
-  snare: 0,
+  harmonyPad: -16,
+  harmonyHalo: -30,
+  harmonyRoot: -36,
+  bass: -2,
+  melody: 4,
+  kick: -2,
+  snare: 5,
   hat: -6,
   clap: -2,
 };
