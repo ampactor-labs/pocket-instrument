@@ -28,7 +28,7 @@ import {
 import { createAudio, KIT_NAMES, HARMONY_PRESET_NAMES, BASS_PRESET_NAMES, MELODY_PRESET_NAMES } from "./audio.js";
 
 // Pitch range shown in the piano roll, per track.
-const PIANO = { melody: { base: 60, rows: 15 }, bass: { base: 36, rows: 12 } };
+const PIANO = { melody: { base: 12, rows: 56 }, bass: { base: 12, rows: 56 } };
 
 function setNoteSlot(lane, step, notes) {
   const clean = notes
@@ -1541,10 +1541,17 @@ function buildPianoEditor(sceneIndex, scene, track) {
     return m;
   };
   const scrollToNotes = () => {
-    // Find the first active row or just default to middle if empty
-    const activeRow = scrollContainer.querySelector(".pcell.on")?.closest(".prow");
+    const sheetEl = document.getElementById("sheet");
+    const activeRow = sheetEl.querySelector(".pcell.on")?.closest(".prow");
     if (activeRow) {
-      scrollContainer.scrollTop = activeRow.offsetTop - scrollContainer.clientHeight / 2 + activeRow.clientHeight / 2;
+      sheetEl.scrollTop = activeRow.offsetTop - sheetEl.clientHeight / 2 + activeRow.clientHeight / 2;
+    } else {
+      const defaultMidi = track === "bass" ? 36 : 60; // C2 or C4
+      const targetRi = rows.findIndex(m => m <= defaultMidi);
+      if (targetRi >= 0) {
+        const rowEl = grid.children[targetRi];
+        if (rowEl) sheetEl.scrollTop = rowEl.offsetTop - sheetEl.clientHeight / 2 + rowEl.clientHeight / 2;
+      }
     }
   };
 
@@ -1602,33 +1609,7 @@ function buildPianoEditor(sceneIndex, scene, track) {
   ]);
   sheet.appendChild(tf);
 
-  const scrollContainer = el("div", { class: "proll-scroll" });
   const grid = el("div", { class: "proll" });
-  
-  // Custom scroll for desktop wheel
-  scrollContainer.addEventListener("wheel", (e) => {
-    scrollContainer.scrollTop += e.deltaY;
-    e.preventDefault();
-  }, { passive: false });
-
-  // Custom touch drag for left key column
-  let scrollDragY = null;
-  scrollContainer.addEventListener("pointerdown", (e) => {
-    const rect = scrollContainer.getBoundingClientRect();
-    if (e.clientX - rect.left < 50) { // Dragging on the key names area
-      scrollDragY = e.clientY;
-      scrollContainer.setPointerCapture(e.pointerId);
-    }
-  });
-  scrollContainer.addEventListener("pointermove", (e) => {
-    if (scrollDragY !== null) {
-      scrollContainer.scrollTop += scrollDragY - e.clientY;
-      scrollDragY = e.clientY;
-    }
-  });
-  scrollContainer.addEventListener("pointerup", () => scrollDragY = null);
-  scrollContainer.addEventListener("pointercancel", () => scrollDragY = null);
-
   const rowCells = []; // [rowIndex][step]
   const cursorCols = Array.from({ length: 16 }, () => []);
 
@@ -1663,8 +1644,7 @@ function buildPianoEditor(sceneIndex, scene, track) {
       ])
     );
   });
-  scrollContainer.appendChild(grid);
-  sheet.appendChild(scrollContainer);
+  sheet.appendChild(grid);
 
   // Velocity lane.
   const vlane = el("div", { class: "vlane" });
