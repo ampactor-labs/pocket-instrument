@@ -28,7 +28,7 @@ const SOURCE_LEVEL_DB = {
 const KICK_DUCK_GAIN = Tone.dbToGain(-8);
 const DRUM_PARALLEL_GAIN = Tone.dbToGain(-10);
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const sendGain = (db) => (db <= -59 ? 0 : Tone.dbToGain(db));
+const sendGain = (db) => (db <= -29 ? 0 : Tone.dbToGain(db));
 
 function scheduleKickDuck(param, time) {
   param.cancelScheduledValues(time);

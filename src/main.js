@@ -1040,10 +1040,10 @@ function openClipProps(sceneIndex, track) {
 // ---------------------------------------------------------------------------
 let mixerRAF = 0;
 const MIX_DEFAULTS = {
-  harmony: { vol: DEFAULT_TRACK_VOLUME_DB, pan: 0, verb: -60, echo: -60, mute: false, solo: false },
-  drums: { vol: DEFAULT_TRACK_VOLUME_DB, pan: 0, verb: -60, echo: -60, mute: false, solo: false },
-  bass: { vol: DEFAULT_TRACK_VOLUME_DB, pan: 0, verb: -60, echo: -60, mute: false, solo: false },
-  melody: { vol: DEFAULT_TRACK_VOLUME_DB, pan: 0, verb: -60, echo: -60, mute: false, solo: false },
+  harmony: { vol: DEFAULT_TRACK_VOLUME_DB, pan: 0, verb: -30, echo: -30, mute: false, solo: false },
+  drums: { vol: DEFAULT_TRACK_VOLUME_DB, pan: 0, verb: -30, echo: -30, mute: false, solo: false },
+  bass: { vol: DEFAULT_TRACK_VOLUME_DB, pan: 0, verb: -30, echo: -30, mute: false, solo: false },
+  melody: { vol: DEFAULT_TRACK_VOLUME_DB, pan: 0, verb: -30, echo: -30, mute: false, solo: false },
 };
 const mixState = structuredClone(MIX_DEFAULTS);
 
@@ -1321,8 +1321,8 @@ function openMixer(focusTrack = null) {
     volSlider.addEventListener("input", () => { ms.vol = clampTrackDb(parseFloat(volSlider.value)); audio.setVol(k, ms.vol); volLabel.textContent = formatDb(ms.vol); });
 
     const panSlider = knob("pan", -1, 1, 0.05, ms.pan, (v) => { ms.pan = v; audio.setPan(k, v); }, (v) => (v === 0 ? "C" : v < 0 ? `L${Math.round(-v * 100)}` : `R${Math.round(v * 100)}`));
-    const verbSlider = knob("verb", -60, 0, 1, ms.verb, (v) => { ms.verb = v; audio.setSend(k, v); });
-    const echoSlider = knob("echo", -60, 0, 1, ms.echo, (v) => { ms.echo = v; audio.setEcho(k, v); });
+    const verbSlider = knob("verb", -30, 0, 1, ms.verb, (v) => { ms.verb = v; audio.setSend(k, v); });
+    const echoSlider = knob("echo", -30, 0, 1, ms.echo, (v) => { ms.echo = v; audio.setEcho(k, v); });
 
     // Device preset selector — all tracks get 3 options
     const devSection = el("div", { class: "mx-dev-section" });
@@ -2264,17 +2264,17 @@ function restoreDevices(devices = {}) {
 function restoreMix(mix = {}) {
   for (const t of TRACKS) {
     const key = t.key;
-    const defaults = MIX_DEFAULTS[key];
+    const defaults = { vol: -6, pan: 0, verb: -30, echo: -30, mute: false, solo: false };
     const src = mix[key] || {};
-    const srcVol = Number(src.vol);
-    Object.assign(mixState[key], {
-      vol: Number.isFinite(srcVol) ? clampTrackDb(srcVol) : defaults.vol,
+    const parsed = {
+      vol: Number.isFinite(Number(src.vol)) ? Number(src.vol) : defaults.vol,
       pan: Number.isFinite(Number(src.pan)) ? Number(src.pan) : defaults.pan,
       verb: Number.isFinite(Number(src.verb)) ? Number(src.verb) : Number.isFinite(Number(src.send)) ? Number(src.send) : defaults.verb,
       echo: Number.isFinite(Number(src.echo)) ? Number(src.echo) : defaults.echo,
       mute: !!src.mute,
       solo: !!src.solo,
-    });
+    };
+    Object.assign(mixState[key], parsed);
   }
   applyMixState();
 }
