@@ -97,7 +97,21 @@ function randomizePresets() {
   audio.setMelodyPreset(pick(MELODY_PRESET_NAMES));
   audio.setKit(pick(KIT_NAMES));
 }
+// The dice must never deal dead air: "deep" is a driveless sine, and a sine
+// in octave 1 (~33 Hz fundamental, no harmonics) is inaudible on phone and
+// bookshelf speakers alike. Fold a fresh magic bassline up an octave when it
+// lands there. Presets with drive keep their low rolls — their harmonics
+// carry on small speakers. Hand-placed low notes are untouched on purpose.
+function fitBassRegister(scene) {
+  if (audio.bassPreset() !== "deep") return scene;
+  const notes = scene.bass.flatMap((slot) => noteSlot(slot));
+  if (notes.length && notes.some((n) => n.midi < 36)) {
+    for (const n of notes) n.midi += 12;
+  }
+  return scene;
+}
 randomizePresets();
+fitBassRegister(song.scenes[0]);
 const PROJECT_SCHEMA = "noodles-project";
 const PROJECT_VERSION = 1;
 const LOCAL_PROJECT_KEY = "noodles:last-project";
@@ -364,7 +378,7 @@ function openAddSceneSheet() {
     el("div", { class: "tfrow" }, [
       el("div", { class: "tfbtn", text: "Blank", onclick: () => addScene(emptyScene()) }),
       el("div", { class: "tfbtn", text: "Duplicate Current", onclick: () => addScene(cloneScene(song.scenes[baseIndex])) }),
-      el("div", { class: "tfbtn accent", text: "Magic", onclick: () => addScene(makeMagicScene()) }),
+      el("div", { class: "tfbtn accent", text: "Magic", onclick: () => addScene(fitBassRegister(makeMagicScene())) }),
     ])
   );
   openSheet();
@@ -488,6 +502,7 @@ function rerollSong() {
   for (const key of Object.keys(song)) delete song[key];
   Object.assign(song, fresh);
   randomizePresets();
+  fitBassRegister(song.scenes[0]);
   selClip = null;
   arrPlayBar = 0;
   playingScene = -1;

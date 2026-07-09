@@ -297,6 +297,19 @@ try {
   const scenesAfterUndo = await page.evaluate(() => window.__noodles.song.scenes.length);
   assertState(scenesAfterUndo === scenesBeforeDice, `undo did not restore the pre-dice song (${scenesAfterUndo} vs ${scenesBeforeDice})`);
 
+  // Roll a handful more and hold the register invariant: the dice never deals
+  // a driveless sine bass in octave 1 (inaudible on real speakers).
+  for (let i = 0; i < 6; i++) {
+    const roll = await page.evaluate(() => {
+      document.querySelector("#dice-btn").click();
+      const { song, audio } = window.__noodles;
+      const midis = song.scenes[0].bass.flatMap((slot) => (slot || []).map((n) => n.midi));
+      return { preset: audio.bassPreset(), minMidi: Math.min(...midis), count: midis.length };
+    });
+    assertState(roll.count > 0, `dice roll ${i} produced an empty bassline`);
+    assertState(roll.preset !== "deep" || roll.minMidi >= 36, `dice dealt deep bass below octave 2 (min midi ${roll.minMidi})`);
+  }
+
   assertState(errors.length === 0, `runtime errors:\n${errors.join("\n")}`);
   console.log(`smoke ok: ${propsShotPath}`);
   console.log(`smoke ok: ${mixerShotPath}`);
