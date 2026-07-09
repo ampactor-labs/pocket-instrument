@@ -112,6 +112,8 @@ const queuedSceneTracks = Object.fromEntries(TRACKS.map((t) => [t.key, -1]));
 const sceneEls = []; // per scene: { row, clips: {track: el} }
 
 let view = "session"; // 'session' | 'arrangement'
+let sessionRecord = false;
+let sessionRecordStartBar = 0;
 let ppb = 37; // arrangement pixels-per-bar; default zoomed out so bar 8 fills screen
 let arrPlayBar = 0; // arrangement playhead position in bars
 let selClip = null; // { track, idx }
@@ -195,11 +197,20 @@ function renderTransport() {
     text: "▶",
     onclick: togglePlayback,
   });
+  const recBtn = el("div", {
+    class: "tbtn record" + (sessionRecord ? " on" : ""),
+    text: "●",
+    id: "rec-btn",
+    onclick: () => {
+      sessionRecord = !sessionRecord;
+      renderTransport();
+    },
+  });
   bpmEl = el("div", { id: "bpm", role: "button", tabindex: "0", html: `${song.tempo}<small>BPM</small>` });
   bindTempoControl(bpmEl);
   undoBtn = el("div", { class: "tbtn undo", text: "↶", onclick: undo });
   redoBtn = el("div", { class: "tbtn redo", text: "↷", onclick: redo });
-  const left = el("div", { class: "tleft" }, [playBtn, undoBtn, redoBtn]);
+  const left = el("div", { class: "tleft" }, [recBtn, playBtn, undoBtn, redoBtn]);
   const tempo = el("div", { class: "ttempo" }, [bpmEl]);
   // View toggle + File button live in the header (always visible)
   const viewBtn = el("div", {
@@ -405,7 +416,7 @@ function setView(v) {
 }
 function updatePlayBtn(on) {
   playBtn.classList.toggle("on", on);
-  playBtn.textContent = on ? "⏸" : "▶";
+  playBtn.textContent = on ? "⏹" : "▶";
 }
 function clampTempo(v) {
   return Math.max(TEMPO_MIN, Math.min(TEMPO_MAX, Math.round(v)));
@@ -2252,10 +2263,52 @@ audio.onVisual((e) => {
   else if (e.scene !== undefined && e.scene !== playingScene) setPlaying(e.scene);
   // Always sync queued state from audio engine
   if (e.queuedTracks !== undefined) applyQueued(e.queuedTracks);
-  if (e.type === "step" && editor && editor.cursorCols) {
-    if (editor.cursor >= 0) editor.cursorCols[editor.cursor]?.forEach((c) => c.classList.remove("cursor"));
-    editor.cursor = e.stepInBar;
-    editor.cursorCols[e.stepInBar]?.forEach((c) => c.classList.add("cursor"));
+  
+  if (e.type === "step") {
+    if (sessionRecord && audio.playing && e.stepInBar === 0 && view === "session") {
+      let dirty = false;
+      for (const track of ARRANGE_TRACKS) {
+        const sceneIdx = e.activeScenes[track];
+        const trackArr = song.arrangement[track];
+        
+        // Truncate or remove existing clips that overlap the current arrPlayBar
+        for (let i = trackArr.length - 1; i >= 0; i--) {
+          const c = trackArr[i];
+          if (arrPlayBar >= c.start && arrPlayBar < c.start + c.len) {
+            if (arrPlayBar === c.start) {
+              c.start += 1;
+              c.len -= 1;
+              if (c.len <= 0) trackArr.splice(i, 1);
+            } else {
+              c.len = arrPlayBar - c.start;
+            }
+          }
+        }
+
+        if (sceneIdx !== undefined && sceneIdx >= 0) {
+          let extended = false;
+          for (const c of trackArr) {
+            if (c.scene === sceneIdx && c.start + c.len === arrPlayBar) {
+              c.len += 1;
+              extended = true;
+              break;
+            }
+          }
+          if (!extended) {
+            trackArr.push({ scene: sceneIdx, start: arrPlayBar, len: 1 });
+          }
+          dirty = true;
+        }
+      }
+      arrPlayBar++;
+      if (dirty) scheduleSave();
+    }
+
+    if (editor && editor.cursorCols) {
+      if (editor.cursor >= 0) editor.cursorCols[editor.cursor]?.forEach((c) => c.classList.remove("cursor"));
+      editor.cursor = e.stepInBar;
+      editor.cursorCols[e.stepInBar]?.forEach((c) => c.classList.add("cursor"));
+    }
   }
 });
 

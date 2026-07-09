@@ -70,16 +70,16 @@ export function createAudio(song) {
   const draw = Tone.getDraw();
   const masterMeter = new Tone.Meter();
   const masterLimiter = new Tone.Limiter(-1).toDestination();
-  const softClip = new Tone.WaveShaper((x) => Math.tanh(x * 1.18) / Math.tanh(1.18), 2048).connect(masterLimiter);
-  const glue = new Tone.Compressor({ threshold: -18, ratio: 1.7, attack: 0.025, release: 0.18, knee: 18 }).connect(softClip);
-  const saturation = new Tone.Distortion(0.08).connect(glue);
-  saturation.wet.value = 0.18;
+  const softClip = new Tone.WaveShaper((x) => Math.tanh(x * 1.25) / Math.tanh(1.25), 2048).connect(masterLimiter);
+  const glue = new Tone.Compressor({ threshold: -18, ratio: 4, attack: 0.025, release: 0.18, knee: 18 }).connect(softClip);
+  const saturation = new Tone.Distortion(0.12).connect(glue);
+  saturation.wet.value = 0.50;
   const master = new Tone.Gain(Tone.dbToGain(-3)).connect(saturation);
   masterLimiter.connect(masterMeter);
   // Algorithmic (Freeverb) instead of convolution — far cheaper per sample on a
   // low-end mobile CPU, and fine for a send reverb.
   const reverb = new Tone.Freeverb({ roomSize: 0.72, dampening: 2600, wet: 1 }).connect(master);
-  const echo = new Tone.FeedbackDelay({ delayTime: "8n", feedback: 0.26, wet: 0.72 }).connect(master);
+  const echo = new Tone.FeedbackDelay({ delayTime: "8n", feedback: 0.26, wet: 1 }).connect(master);
   const echoReturn = new Tone.Gain(Tone.dbToGain(-4)).connect(echo);
 
   // Mixer strips — direct gain wiring (no send/receive bus, which can silently
@@ -574,14 +574,14 @@ export function createAudio(song) {
         offTr.swing = song.swing ?? 0;
         offTr.swingSubdivision = "16n";
         const offLimiter = new Tone.Limiter(-1).toDestination();
-        const offSoftClip = new Tone.WaveShaper((x) => Math.tanh(x * 1.18) / Math.tanh(1.18), 2048).connect(offLimiter);
-        const offGlue = new Tone.Compressor({ threshold: -18, ratio: 1.7, attack: 0.025, release: 0.18, knee: 18 }).connect(offSoftClip);
-        const offSat = new Tone.Distortion(0.08).connect(offGlue);
-        offSat.wet.value = 0.18;
+        const offSoftClip = new Tone.WaveShaper((x) => Math.tanh(x * 1.25) / Math.tanh(1.25), 2048).connect(offLimiter);
+        const offGlue = new Tone.Compressor({ threshold: -18, ratio: 4, attack: 0.025, release: 0.18, knee: 18 }).connect(offSoftClip);
+        const offSat = new Tone.Distortion(0.12).connect(offGlue);
+        offSat.wet.value = 0.50;
         const offMaster = new Tone.Gain(Tone.dbToGain(-3)).connect(offSat);
         const offReverb = new Tone.Freeverb({ roomSize: 0.72, dampening: 2600, wet: 1 }).connect(offMaster);
         const offEchoReturn = new Tone.Gain(Tone.dbToGain(-4)).connect(offMaster);
-        const offEcho = new Tone.FeedbackDelay({ delayTime: "8n", feedback: 0.26, wet: 0.72 }).connect(offEchoReturn);
+        const offEcho = new Tone.FeedbackDelay({ delayTime: "8n", feedback: 0.26, wet: 1 }).connect(offEchoReturn);
         const offCh = {};
         for (const k of TRACK_KEYS) {
           const muted = soloTrack && k !== soloTrack;
