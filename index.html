@@ -69,13 +69,12 @@
         padding: 0 10px;
         border-right: 1px solid #000;
       }
-      .tscroll {
+      .ttempo {
         flex: 1;
         min-width: 0;
         display: flex;
         align-items: center;
-        gap: 9px;
-        overflow-x: auto;
+        justify-content: flex-end;
         padding: 0 12px;
       }
       .tbtn {
@@ -98,6 +97,17 @@
       }
       #bpm {
         flex: 0 0 auto;
+        min-width: 78px;
+        padding: 8px 10px;
+        border: 1px solid #000;
+        border-radius: 6px;
+        background: #2b2b2e;
+        text-align: center;
+        touch-action: none;
+      }
+      #bpm.dragging {
+        background: #3a3a40;
+        color: #fff;
       }
       .swingctl {
         display: flex;
@@ -161,6 +171,31 @@
         flex: 1;
       }
 
+      #footer {
+        flex: 0 0 auto;
+        display: grid;
+        gap: 6px;
+        padding: 6px 8px calc(7px + env(safe-area-inset-bottom, 0px));
+        background: var(--bar);
+        border-top: 1px solid #000;
+        position: relative;
+        z-index: 6;
+      }
+      .frow {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+      .frow .tbtn {
+        height: 32px;
+        min-width: 42px;
+        padding: 0 9px;
+      }
+      .fspacer {
+        flex: 1;
+      }
+
       /* Session grid */
       #session {
         flex: 1;
@@ -177,7 +212,7 @@
       }
       .head {
         background: var(--panel);
-        padding: 8px 6px 7px;
+        padding: 6px 5px 5px;
         font-size: 11px;
         font-weight: 700;
         letter-spacing: 0.4px;
@@ -188,9 +223,78 @@
         overflow: hidden;
         text-overflow: ellipsis;
       }
+      .head.track-head {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        align-items: center;
+        justify-content: center;
+      }
+      .head.track-head.pressing,
+      .arr-thead.pressing {
+        filter: brightness(1.16);
+      }
+      .head-name {
+        width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
       .head.corner {
         background: var(--bar);
         border-bottom: 2px solid #000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .view-mix {
+        min-width: 44px;
+        height: 28px;
+        border: 1px solid #000;
+        border-radius: 5px;
+        background: #2b2b2e;
+        color: var(--text);
+        font-size: 12px;
+        font-weight: 800;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .head-ms,
+      .arr-thead .ms,
+      .mx-ms {
+        display: flex;
+        gap: 4px;
+      }
+      .msbtn {
+        width: 22px;
+        height: 20px;
+        border-radius: 4px;
+        background: #2a2a2c;
+        border: 1px solid #000;
+        color: var(--dim);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 10px;
+        font-weight: 900;
+        touch-action: manipulation;
+      }
+      .msbtn.on {
+        background: color-mix(in srgb, var(--tc) 62%, #19191b);
+        color: #fff;
+        border-color: color-mix(in srgb, var(--tc) 82%, #000);
+      }
+      .track-head.muted,
+      .mx-strip.muted {
+        opacity: 0.62;
+      }
+      .track-head.soloed {
+        outline: 1px solid color-mix(in srgb, var(--tc) 80%, #fff);
+        outline-offset: -1px;
+      }
+      .clip.track-muted,
+      .arr-lane.track-muted .arr-clip {
+        opacity: 0.38;
       }
       .scenecell {
         background: var(--panel);
@@ -311,9 +415,11 @@
         padding: 10px 12px calc(16px + env(safe-area-inset-bottom, 0px));
         max-height: 78%;
         overflow-y: auto;
+        pointer-events: none;
       }
       #sheet.open {
         transform: translateY(0);
+        pointer-events: auto;
       }
       .sheet-bar {
         display: flex;
@@ -395,6 +501,22 @@
       }
       .choice.stepper {
         font-size: 18px;
+      }
+      .tempo-sheet {
+        display: grid;
+        gap: 10px;
+      }
+      .tempo-input {
+        width: 100%;
+        height: 54px;
+        border-radius: 8px;
+        border: 1px solid #000;
+        background: #151517;
+        color: var(--text);
+        text-align: center;
+        font-size: 24px;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
       }
 
       /* Drum step grid */
@@ -518,6 +640,14 @@
       .arr-corner {
         height: 28px;
         border-bottom: 1px solid #000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .arr-corner .view-mix {
+        height: 22px;
+        min-width: 48px;
+        font-size: 11px;
       }
       .arr-thead {
         height: 64px;
@@ -541,18 +671,6 @@
       .arr-thead .ms {
         display: flex;
         gap: 4px;
-      }
-      .arr-thead .ms b {
-        font-size: 9px;
-        font-weight: 800;
-        width: 17px;
-        height: 15px;
-        border-radius: 3px;
-        background: #2a2a2c;
-        color: var(--dim);
-        display: flex;
-        align-items: center;
-        justify-content: center;
       }
       .arr-scroll {
         overflow-x: auto;
@@ -783,6 +901,27 @@
         padding-bottom: 6px;
         border-bottom: 1px solid #2a2a2c;
       }
+      .mx-ms {
+        width: 100%;
+        justify-content: center;
+      }
+      .mx-strip.focus {
+        outline: 2px solid color-mix(in srgb, var(--tc) 75%, #fff);
+        outline-offset: -2px;
+      }
+      .mx-master {
+        background: #202022;
+      }
+      .mx-master-note,
+      .mx-master-chain {
+        width: 100%;
+        color: var(--dim);
+        font-size: 9px;
+        font-weight: 800;
+        line-height: 1.25;
+        text-transform: uppercase;
+        text-align: center;
+      }
       .mx-dot {
         width: 8px;
         height: 8px;
@@ -895,6 +1034,9 @@
         color: var(--dim);
         min-height: 20px;
       }
+      .project-file {
+        display: none;
+      }
 
       /* Transform buttons (Arp / Humanize / ...) */
       .tfrow {
@@ -922,6 +1064,7 @@
       <div id="transport"></div>
       <div id="session"></div>
       <div id="arrangement"></div>
+      <div id="footer"></div>
     </div>
     <div id="scrim"></div>
     <div id="sheet"></div>

@@ -1,4 +1,4 @@
-# Pocket instrument
+# Noodles
 
 A phone-first music sketchpad. It borrows Ableton's interaction model (the clip
 grid, launch-and-loop, direct drag, scale-awareness, one-tap transforms) and

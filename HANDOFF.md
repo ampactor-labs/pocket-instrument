@@ -1,4 +1,4 @@
-# Handoff — Pocket Instrument `[CODENAME: TBD]`
+# Handoff — Noodles `[CODENAME: NOODLES]`
 
 A playful pocket sketchpad for harmony, rhythm, and melody. Seconds to a sound you love, hours of depth when you go looking. The learning is smuggled in through the instrument itself — never a teaching mode, never a quiz, never cheese.
 

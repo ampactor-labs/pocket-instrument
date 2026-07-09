@@ -68,27 +68,51 @@ export function createAudio(song) {
   // transport the loop isn't on (silent, no playhead). Bind to the live context.
   const transport = Tone.getTransport();
   const draw = Tone.getDraw();
-  const master = new Tone.Limiter(-1).toDestination();
+  const masterMeter = new Tone.Meter();
+  const masterLimiter = new Tone.Limiter(-1).toDestination();
+  const softClip = new Tone.WaveShaper((x) => Math.tanh(x * 1.18) / Math.tanh(1.18), 2048).connect(masterLimiter);
+  const glue = new Tone.Compressor({ threshold: -18, ratio: 1.7, attack: 0.025, release: 0.18, knee: 18 }).connect(softClip);
+  const saturation = new Tone.Distortion(0.08).connect(glue);
+  saturation.wet.value = 0.18;
+  const master = new Tone.Gain(Tone.dbToGain(-3)).connect(saturation);
+  masterLimiter.connect(masterMeter);
   // Algorithmic (Freeverb) instead of convolution — far cheaper per sample on a
   // low-end mobile CPU, and fine for a send reverb.
   const reverb = new Tone.Freeverb({ roomSize: 0.72, dampening: 2600, wet: 1 }).connect(master);
   // A Channel return receives the "verb" send bus and feeds the reverb.
   const reverbReturn = new Tone.Channel().connect(reverb);
   reverbReturn.receive("verb");
+  const echo = new Tone.FeedbackDelay({ delayTime: "8n", feedback: 0.26, wet: 0.72 }).connect(master);
+  const echoReturn = new Tone.Channel({ volume: -4 }).connect(echo);
+  echoReturn.receive("echo");
 
   // Mixer strips.
   const channels = {};
   const meters = {};
-  const sends = {};
+  const verbSends = {};
+  const echoSends = {};
+  const muteState = Object.fromEntries(TRACK_KEYS.map((track) => [track, false]));
+  const soloState = Object.fromEntries(TRACK_KEYS.map((track) => [track, false]));
   for (const k of TRACK_KEYS) {
     const chVol = k === "harmony" ? -6 : 0;
     channels[k] = new Tone.Channel({ volume: chVol, pan: 0 }).connect(master);
     meters[k] = new Tone.Meter();
     channels[k].connect(meters[k]);
-    sends[k] = channels[k].send("verb", -60);
+    verbSends[k] = channels[k].send("verb", -60);
+    echoSends[k] = channels[k].send("echo", -60);
   }
-  const sendDefault = { harmony: -9, melody: -11, drums: -22, bass: -48 };
-  for (const k of TRACK_KEYS) sends[k].gain.value = Tone.dbToGain(sendDefault[k]);
+  const verbDefault = { harmony: -9, melody: -11, drums: -22, bass: -48 };
+  const echoDefault = { harmony: -36, melody: -28, drums: -42, bass: -60 };
+  for (const k of TRACK_KEYS) {
+    verbSends[k].gain.value = Tone.dbToGain(verbDefault[k]);
+    echoSends[k].gain.value = Tone.dbToGain(echoDefault[k]);
+  }
+  function applyTrackGates() {
+    const anySolo = TRACK_KEYS.some((track) => soloState[track]);
+    for (const track of TRACK_KEYS) {
+      channels[track].mute = muteState[track] || (anySolo && !soloState[track]);
+    }
+  }
 
   // Harmony: lush pad.
   const chorus = new Tone.Chorus({ frequency: 0.4, delayTime: 4, depth: 0.6, wet: 0.35 }).start();
@@ -430,9 +454,26 @@ export function createAudio(song) {
       channels[track].pan.value = p;
     },
     setSend(track, db) {
-      sends[track].gain.value = Tone.dbToGain(db);
+      verbSends[track].gain.value = Tone.dbToGain(db);
+    },
+    setEcho(track, db) {
+      echoSends[track].gain.value = Tone.dbToGain(db);
+    },
+    setMute(track, on) {
+      if (!(track in channels)) return;
+      muteState[track] = !!on;
+      applyTrackGates();
+    },
+    setSolo(track, on) {
+      if (!(track in channels)) return;
+      soloState[track] = !!on;
+      applyTrackGates();
     },
     meter(track) {
+      if (track === "master") {
+        const mv = masterMeter.getValue();
+        return typeof mv === "number" ? mv : Math.max(...mv);
+      }
       const v = meters[track].getValue();
       return typeof v === "number" ? v : Math.max(...v);
     },
@@ -474,14 +515,21 @@ export function createAudio(song) {
         offTr.bpm.value = song.tempo;
         offTr.swing = song.swing ?? 0;
         offTr.swingSubdivision = "16n";
-        const offMaster = new Tone.Limiter(-1).toDestination();
+        const offLimiter = new Tone.Limiter(-1).toDestination();
+        const offSoftClip = new Tone.WaveShaper((x) => Math.tanh(x * 1.18) / Math.tanh(1.18), 2048).connect(offLimiter);
+        const offGlue = new Tone.Compressor({ threshold: -18, ratio: 1.7, attack: 0.025, release: 0.18, knee: 18 }).connect(offSoftClip);
+        const offSat = new Tone.Distortion(0.08).connect(offGlue);
+        offSat.wet.value = 0.18;
+        const offMaster = new Tone.Gain(Tone.dbToGain(-3)).connect(offSat);
         const offReverb = new Tone.Freeverb({ roomSize: 0.72, dampening: 2600, wet: 1 }).connect(offMaster);
+        const offEchoReturn = new Tone.Gain(Tone.dbToGain(-4)).connect(offMaster);
+        const offEcho = new Tone.FeedbackDelay({ delayTime: "8n", feedback: 0.26, wet: 0.72 }).connect(offEchoReturn);
         const offCh = {};
         for (const k of TRACK_KEYS) {
           const muted = soloTrack && k !== soloTrack;
           offCh[k] = new Tone.Channel({ volume: muted ? -Infinity : (k === "harmony" ? -6 : 0) }).connect(offMaster);
-          const s = offCh[k].send("verb", -60);
-          s.gain.value = Tone.dbToGain(sendDefault[k]);
+          offCh[k].connect(new Tone.Gain(Tone.dbToGain(verbDefault[k])).connect(offReverb));
+          offCh[k].connect(new Tone.Gain(Tone.dbToGain(echoDefault[k])).connect(offEcho));
         }
         const offPadF = new Tone.Filter({ type: "lowpass", frequency: 1500, Q: 0.7 });
         const offChorus = new Tone.Chorus({ frequency: 0.4, delayTime: 4, depth: 0.6, wet: 0.35 }).start();

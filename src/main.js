@@ -41,6 +41,9 @@ const trackColor = (k) => TRACKS.find((t) => t.key === k).color;
 const song = makeSong();
 setScaleContext(song.key, song.scale);
 const audio = createAudio(song);
+const PROJECT_SCHEMA = "noodles-project";
+const PROJECT_VERSION = 1;
+const LOCAL_PROJECT_KEY = "noodles:last-project";
 
 // --- DOM helpers ---
 function el(tag, props = {}, kids = []) {
@@ -122,8 +125,11 @@ function updateUndoButtons() {
 // Transport
 // ---------------------------------------------------------------------------
 const transport = document.getElementById("transport");
+const footer = document.getElementById("footer");
 let playBtn;
 let bpmEl;
+const TEMPO_MIN = 40;
+const TEMPO_MAX = 220;
 
 function renderTransport() {
   transport.innerHTML = "";
@@ -146,9 +152,21 @@ function renderTransport() {
       updatePlayBtn(audio.playing);
     },
   });
-  bpmEl = el("div", { id: "bpm", html: `${song.tempo}<small>BPM</small>` });
-  const minus = el("div", { class: "tbtn", text: "–", onclick: () => nudgeTempo(-1) });
-  const plus = el("div", { class: "tbtn", text: "+", onclick: () => nudgeTempo(1) });
+  bpmEl = el("div", { id: "bpm", role: "button", tabindex: "0", html: `${song.tempo}<small>BPM</small>` });
+  bindTempoControl(bpmEl);
+  // Play/pause + undo/redo are pinned left and never scroll.
+  undoBtn = el("div", { class: "tbtn undo", text: "↶", onclick: undo });
+  redoBtn = el("div", { class: "tbtn redo", text: "↷", onclick: redo });
+  const left = el("div", { class: "tleft" }, [playBtn, undoBtn, redoBtn]);
+  const tempo = el("div", { class: "ttempo" }, [bpmEl]);
+  transport.append(left, tempo);
+  updateUndoButtons();
+  renderFooter();
+}
+
+function renderFooter() {
+  if (!footer) return;
+  footer.innerHTML = "";
   const grooveVal = el("span", { class: "swval", text: Math.round(song.swing * 100) + "%" });
   const grooveSlider = el("input", {
     type: "range",
@@ -165,7 +183,7 @@ function renderTransport() {
     grooveVal.textContent = Math.round(song.swing * 100) + "%";
   });
   const groove = el("div", { class: "swingctl" }, [
-    el("span", { class: "swlabel", text: "groove" }),
+    el("span", { class: "swlabel", text: "Groove" }),
     grooveSlider,
     grooveVal,
   ]);
@@ -183,7 +201,7 @@ function renderTransport() {
     scaleSel.appendChild(o);
   });
   scaleSel.addEventListener("change", () => setKeyScale(song.key, scaleSel.value));
-  const keyctl = el("div", { class: "keyctl" }, [el("span", { class: "swlabel", text: "key" }), keySel, scaleSel]);
+  const keyctl = el("div", { class: "keyctl" }, [el("span", { class: "swlabel", text: "Key" }), keySel, scaleSel]);
   const seg = el("div", { class: "seg" }, [
     el("div", {
       class: "opt" + (view === "session" ? " on" : ""),
@@ -196,12 +214,11 @@ function renderTransport() {
       onclick: () => setView("arrangement"),
     }),
   ]);
-  seg.style.marginLeft = "auto";
-  const mixBtn = el("div", { class: "tbtn", text: "Mix", onclick: openMixer });
-  const expBtn = el("div", { class: "tbtn", text: "Exp", onclick: openExport });
+  const expBtn = el("div", { class: "tbtn", text: "Exp", "data-action": "open-export", onclick: openExport });
   const addBtn = el("div", {
     class: "tbtn",
-    text: "＋",
+    text: "+ Scene",
+    "data-action": "add-scene",
     onclick: () => {
       pushUndo();
       const from = playingScene >= 0 ? playingScene : song.scenes.length - 1;
@@ -209,13 +226,10 @@ function renderTransport() {
       renderSession();
     },
   });
-  // Play/pause + undo/redo are pinned left and never scroll.
-  undoBtn = el("div", { class: "tbtn undo", text: "↶", onclick: undo });
-  redoBtn = el("div", { class: "tbtn redo", text: "↷", onclick: redo });
-  const left = el("div", { class: "tleft" }, [playBtn, undoBtn, redoBtn]);
-  const scroll = el("div", { class: "tscroll" }, [bpmEl, minus, plus, keyctl, groove, seg, mixBtn, expBtn, addBtn]);
-  transport.append(left, scroll);
-  updateUndoButtons();
+  footer.append(
+    el("div", { class: "frow" }, [keyctl, groove]),
+    el("div", { class: "frow" }, [seg, el("div", { class: "fspacer" }), expBtn, addBtn])
+  );
 }
 
 function setView(v) {
@@ -232,11 +246,111 @@ function updatePlayBtn(on) {
   playBtn.classList.toggle("on", on);
   playBtn.textContent = on ? "⏸" : "▶";
 }
-function nudgeTempo(d) {
-  pushUndo();
-  song.tempo = Math.max(40, Math.min(220, song.tempo + d));
+function clampTempo(v) {
+  return Math.max(TEMPO_MIN, Math.min(TEMPO_MAX, Math.round(v)));
+}
+function updateTempoUI() {
+  if (!bpmEl) return;
   bpmEl.innerHTML = `${song.tempo}<small>BPM</small>`;
+}
+function applyTempo(v) {
+  const next = clampTempo(v);
+  if (!Number.isFinite(next) || next === song.tempo) return false;
+  song.tempo = next;
+  updateTempoUI();
   audio.setTempo(song.tempo);
+  return true;
+}
+function bindTempoControl(node) {
+  node.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      openTempoEditor();
+    }
+  });
+  node.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startTempo = song.tempo;
+    const pre = snapshot();
+    let dragging = false;
+    let changed = false;
+    node.classList.add("dragging");
+    node.setPointerCapture?.(e.pointerId);
+    const move = (ev) => {
+      const dx = ev.clientX - startX;
+      const dy = startY - ev.clientY;
+      if (!dragging && Math.hypot(dx, dy) < 7) return;
+      dragging = true;
+      const delta = Math.round(dy / 2 + dx / 6);
+      changed = applyTempo(startTempo + delta) || changed;
+    };
+    const up = () => {
+      node.classList.remove("dragging");
+      node.removeEventListener("pointermove", move);
+      node.removeEventListener("pointerup", up);
+      node.removeEventListener("pointercancel", cancel);
+      if (dragging) {
+        if (changed) commitUndo(pre);
+      } else {
+        openTempoEditor();
+      }
+    };
+    const cancel = () => {
+      node.classList.remove("dragging");
+      node.removeEventListener("pointermove", move);
+      node.removeEventListener("pointerup", up);
+      node.removeEventListener("pointercancel", cancel);
+      if (changed) commitUndo(pre);
+    };
+    node.addEventListener("pointermove", move);
+    node.addEventListener("pointerup", up);
+    node.addEventListener("pointercancel", cancel);
+  });
+}
+
+function openTempoEditor() {
+  editor = null;
+  cancelAnimationFrame(mixerRAF);
+  mixerRAF = 0;
+  sheet.innerHTML = "";
+  sheet.style.setProperty("--tc", "#e8b84b");
+  const input = el("input", {
+    class: "tempo-input",
+    type: "number",
+    inputmode: "numeric",
+    min: String(TEMPO_MIN),
+    max: String(TEMPO_MAX),
+    step: "1",
+    value: String(song.tempo),
+  });
+  const setTypedTempo = () => {
+    const next = Number(input.value);
+    if (Number.isFinite(next) && clampTempo(next) !== song.tempo) {
+      pushUndo();
+      applyTempo(next);
+    }
+    closeEditor();
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") setTypedTempo();
+  });
+  sheet.appendChild(
+    el("div", { class: "sheet-bar" }, [
+      el("div", { class: "swatch" }),
+      el("div", { class: "title", text: "Tempo" }),
+      el("div", { class: "sub", text: `${TEMPO_MIN}-${TEMPO_MAX} BPM` }),
+      el("div", { class: "close", text: "Done", onclick: setTypedTempo }),
+    ])
+  );
+  sheet.appendChild(el("div", { class: "tempo-sheet" }, [input]));
+  scrim.classList.add("open");
+  sheet.classList.add("open");
+  setTimeout(() => {
+    input.focus();
+    input.select();
+  }, 40);
 }
 
 // Change the global key/scale; harmony follows automatically (it's degree-based),
@@ -337,18 +451,18 @@ function renderSession() {
   sessionEl.innerHTML = "";
   sceneEls.length = 0;
   const grid = el("div", { class: "grid" });
-  grid.appendChild(el("div", { class: "head corner", text: "" }));
+  grid.style.gridTemplateColumns = `58px repeat(${TRACKS.length}, 1fr)`;
+  grid.appendChild(el("div", { class: "head corner" }, [viewMixButton()]));
   for (const t of TRACKS) {
-    const head = el("div", { class: "head", style: `--tc:${t.color}`, text: t.name });
-    // Long-press track header → open mixer for that track
-    let ht = 0, hlp = false;
-    head.addEventListener("pointerdown", () => {
-      hlp = false;
-      ht = window.setTimeout(() => { hlp = true; openMixer(); }, 520);
-    });
-    head.addEventListener("pointerup", () => { clearTimeout(ht); });
-    head.addEventListener("pointercancel", () => { clearTimeout(ht); });
-    head.addEventListener("click", () => { if (hlp) { hlp = false; } });
+    const head = el("div", {
+      class: "head track-head",
+      style: `--tc:${t.color}`,
+      "data-track": t.key,
+    }, [
+      el("div", { class: "head-name", text: t.name }),
+      el("div", { class: "head-ms" }, [trackToggleButton(t.key, "mute"), trackToggleButton(t.key, "solo")]),
+    ]);
+    bindTrackHeader(head, t.key);
     grid.appendChild(head);
   }
   song.scenes.forEach((scene, i) => {
@@ -390,6 +504,7 @@ function renderSession() {
   });
   sessionEl.appendChild(grid);
   applyPlaying();
+  updateTrackMixUI();
 }
 
 function setPlaying(i) {
@@ -547,6 +662,18 @@ function openClipProps(sceneIndex, track) {
         },
       }),
       el("div", { class: "tfbtn", text: "Edit", onclick: () => openEditor(sceneIndex, track) }),
+      el("div", {
+        class: "tfbtn",
+        text: "Duplicate Scene",
+        "data-action": "duplicate-scene",
+        onclick: () => {
+          pushUndo();
+          song.scenes.push(cloneScene(scene));
+          const next = song.scenes.length - 1;
+          renderSession();
+          openClipProps(next, track);
+        },
+      }),
     ])
   );
 
@@ -558,12 +685,13 @@ function openClipProps(sceneIndex, track) {
 // Mixer + devices
 // ---------------------------------------------------------------------------
 let mixerRAF = 0;
-const mixState = {
-  harmony: { vol: -6, pan: 0, send: -9 },
-  drums: { vol: 0, pan: 0, send: -22 },
-  bass: { vol: 0, pan: 0, send: -48 },
-  melody: { vol: 0, pan: 0, send: -11 },
+const MIX_DEFAULTS = {
+  harmony: { vol: -6, pan: 0, verb: -9, echo: -36, mute: false, solo: false },
+  drums: { vol: 0, pan: 0, verb: -22, echo: -42, mute: false, solo: false },
+  bass: { vol: 0, pan: 0, verb: -48, echo: -60, mute: false, solo: false },
+  melody: { vol: 0, pan: 0, verb: -11, echo: -28, mute: false, solo: false },
 };
+const mixState = structuredClone(MIX_DEFAULTS);
 
 function slider(min, max, step, val, oninput) {
   const s = el("input", { type: "range", min, max, step, value: val });
@@ -571,15 +699,199 @@ function slider(min, max, step, val, oninput) {
   return s;
 }
 
-function openMixer() {
+function applyTrackMix(track) {
+  const ms = mixState[track];
+  if (!ms) return;
+  audio.setVol(track, ms.vol);
+  audio.setPan(track, ms.pan);
+  audio.setSend(track, ms.verb);
+  audio.setEcho(track, ms.echo);
+  audio.setMute(track, ms.mute);
+  audio.setSolo(track, ms.solo);
+}
+
+function applyMixState() {
+  for (const t of TRACKS) applyTrackMix(t.key);
+  updateTrackMixUI();
+}
+
+function resetTrackMix(track, { sendsOnly = false } = {}) {
+  const next = structuredClone(MIX_DEFAULTS[track]);
+  if (!next) return;
+  if (sendsOnly) {
+    mixState[track].verb = next.verb;
+    mixState[track].echo = next.echo;
+  } else {
+    Object.assign(mixState[track], next);
+  }
+  applyTrackMix(track);
+  updateTrackMixUI();
+}
+
+function resetAllMix({ sendsOnly = false } = {}) {
+  for (const t of TRACKS) resetTrackMix(t.key, { sendsOnly });
+}
+
+function trackMutedByState(track) {
+  const anySolo = Object.values(mixState).some((s) => s.solo);
+  return mixState[track]?.mute || (anySolo && !mixState[track]?.solo);
+}
+function updateTrackMixUI() {
+  document.querySelectorAll("[data-track-toggle]").forEach((btn) => {
+    const state = mixState[btn.dataset.track];
+    const kind = btn.dataset.trackToggle;
+    const on = !!state?.[kind];
+    btn.classList.toggle("on", on);
+    btn.setAttribute("aria-pressed", String(on));
+  });
+  document.querySelectorAll(".track-head[data-track], .arr-thead[data-track], .mx-strip[data-track]").forEach((node) => {
+    const track = node.dataset.track;
+    node.classList.toggle("muted", trackMutedByState(track));
+    node.classList.toggle("soloed", !!mixState[track]?.solo);
+  });
+  document.querySelectorAll(".clip[data-track], .arr-lane[data-track]").forEach((node) => {
+    node.classList.toggle("track-muted", trackMutedByState(node.dataset.track));
+  });
+}
+function setTrackMute(track, on) {
+  if (!mixState[track] || mixState[track].mute === on) return;
+  mixState[track].mute = on;
+  audio.setMute(track, on);
+  updateTrackMixUI();
+}
+function setTrackSolo(track, on) {
+  if (!mixState[track] || mixState[track].solo === on) return;
+  mixState[track].solo = on;
+  audio.setSolo(track, on);
+  updateTrackMixUI();
+}
+function toggleTrackMute(track) {
+  setTrackMute(track, !mixState[track]?.mute);
+}
+function toggleTrackSolo(track) {
+  setTrackSolo(track, !mixState[track]?.solo);
+}
+function trackToggleButton(track, kind) {
+  const isMute = kind === "mute";
+  return el("div", {
+    class: `msbtn ${mixState[track]?.[kind] ? "on" : ""}`,
+    text: isMute ? "M" : "S",
+    role: "button",
+    "aria-pressed": String(!!mixState[track]?.[kind]),
+    "data-track": track,
+    "data-track-toggle": kind,
+    onpointerdown: (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (isMute) toggleTrackMute(track);
+      else toggleTrackSolo(track);
+    },
+  });
+}
+function viewMixButton() {
+  return el("div", {
+    class: "view-mix",
+    text: "Mix",
+    onpointerdown: (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openMixer();
+    },
+  });
+}
+function bindTrackHeader(node, track) {
+  let timer = 0;
+  let longPressed = false;
+  let startX = 0;
+  let startY = 0;
+  const clear = () => {
+    clearTimeout(timer);
+    timer = 0;
+    node.classList.remove("pressing");
+  };
+  node.addEventListener("pointerdown", (e) => {
+    if (e.target.closest("[data-track-toggle]")) return;
+    longPressed = false;
+    startX = e.clientX;
+    startY = e.clientY;
+    node.classList.add("pressing");
+    timer = window.setTimeout(() => {
+      longPressed = true;
+      clear();
+      openTrackOptions(track);
+    }, 520);
+  });
+  node.addEventListener("pointermove", (e) => {
+    if (Math.hypot(e.clientX - startX, e.clientY - startY) > 12) clear();
+  });
+  node.addEventListener("pointerup", clear);
+  node.addEventListener("pointercancel", clear);
+  node.addEventListener("click", () => {
+    if (longPressed) longPressed = false;
+  });
+}
+function openTrackOptions(track) {
+  const meta = TRACKS.find((t) => t.key === track);
+  if (!meta) return;
+  editor = null;
+  cancelAnimationFrame(mixerRAF);
+  mixerRAF = 0;
+  sheet.innerHTML = "";
+  sheet.style.setProperty("--tc", meta.color);
+  const trackChoice = (kind, label) =>
+    el("div", {
+      class: `choice track-choice ${mixState[track][kind] ? "on" : ""}`,
+      text: label,
+      "data-track": track,
+      "data-track-toggle": kind,
+      onpointerdown: (e) => {
+        e.preventDefault();
+        if (kind === "mute") toggleTrackMute(track);
+        else toggleTrackSolo(track);
+      },
+    });
+  sheet.appendChild(
+    el("div", { class: "sheet-bar" }, [
+      el("div", { class: "swatch" }),
+      el("div", { class: "title", text: "Track Options" }),
+      el("div", { class: "sub", text: meta.name }),
+      el("div", { class: "close", text: "Done", onclick: closeEditor }),
+    ])
+  );
+  sheet.appendChild(
+    el("div", { class: "propsection" }, [
+      el("div", { class: "proplabel", text: "state" }),
+      el("div", { class: "choicegrid two" }, [trackChoice("mute", "Mute"), trackChoice("solo", "Solo")]),
+    ])
+  );
+  sheet.appendChild(
+    el("div", { class: "tfrow" }, [
+      el("div", { class: "tfbtn", text: "Mixer Strip", onclick: () => openMixer(track) }),
+      el("div", { class: "tfbtn", text: "Reset Mix", onclick: () => { resetTrackMix(track); openTrackOptions(track); } }),
+      el("div", { class: "tfbtn", text: "Reset Sends", onclick: () => { resetTrackMix(track, { sendsOnly: true }); openTrackOptions(track); } }),
+    ])
+  );
+  scrim.classList.add("open");
+  sheet.classList.add("open");
+  updateTrackMixUI();
+}
+
+function openMixer(focusTrack = null) {
   editor = null;
   sheet.innerHTML = "";
   sheet.style.setProperty("--tc", "#8a8a90");
   sheet.appendChild(
-    el("div", { class: "sheet-bar" }, [
-      el("div", { class: "title", text: "Mixer" }),
-      el("div", { class: "sub", text: "levels · sends · devices" }),
+      el("div", { class: "sheet-bar" }, [
+        el("div", { class: "title", text: "Mixer" }),
+      el("div", { class: "sub", text: "levels · verb · echo · devices" }),
       el("div", { class: "close", text: "Done", onclick: closeEditor }),
+    ])
+  );
+
+  sheet.appendChild(
+    el("div", { class: "tfrow" }, [
+      el("div", { class: "tfbtn", text: "Reset Mix", onclick: () => { resetAllMix(); openMixer(focusTrack); } }),
+      el("div", { class: "tfbtn", text: "Reset Sends", onclick: () => { resetAllMix({ sendsOnly: true }); openMixer(focusTrack); } }),
     ])
   );
 
@@ -598,7 +910,8 @@ function openMixer() {
     volSlider.addEventListener("input", () => { volLabel.textContent = `${ms.vol} dB`; });
 
     const panSlider = slider(-1, 1, 0.05, ms.pan, (v) => { ms.pan = v; audio.setPan(k, v); });
-    const sendSlider = slider(-60, 0, 1, ms.send, (v) => { ms.send = v; audio.setSend(k, v); });
+    const verbSlider = slider(-60, 0, 1, ms.verb, (v) => { ms.verb = v; audio.setSend(k, v); });
+    const echoSlider = slider(-60, 0, 1, ms.echo, (v) => { ms.echo = v; audio.setEcho(k, v); });
 
     // Device preset selector — all tracks get 3 options
     const devSection = el("div", { class: "mx-dev-section" });
@@ -624,21 +937,38 @@ function openMixer() {
       devSection.append(el("div", { class: "mx-devlabel", text: "preset" }), sel);
     }
 
-    const strip = el("div", { class: "mx-strip", style: `--tc:${t.color}` }, [
+    const strip = el("div", { class: "mx-strip" + (focusTrack === k ? " focus" : ""), style: `--tc:${t.color}`, "data-track": k }, [
       el("div", { class: "mx-name" }, [el("span", { class: "mx-dot" }), el("span", { text: t.name })]),
+      el("div", { class: "mx-ms" }, [trackToggleButton(k, "mute"), trackToggleButton(k, "solo")]),
       meter,
       volSlider,
       volLabel,
       el("div", { class: "mx-knob" }, [el("label", { text: "pan" }), panSlider]),
-      el("div", { class: "mx-knob" }, [el("label", { text: "send" }), sendSlider]),
+      el("div", { class: "mx-knob" }, [el("label", { text: "verb" }), verbSlider]),
+      el("div", { class: "mx-knob" }, [el("label", { text: "echo" }), echoSlider]),
       devSection,
     ]);
     container.appendChild(strip);
   }
+  const masterFill = el("i");
+  meterBars.master = masterFill;
+  container.appendChild(
+    el("div", { class: "mx-strip mx-master", style: "--tc:#d2d2d4", "data-track": "master" }, [
+      el("div", { class: "mx-name" }, [el("span", { class: "mx-dot" }), el("span", { text: "Master" })]),
+      el("div", { class: "mx-master-note", text: "safe chain" }),
+      el("div", { class: "mx-meter" }, [el("div", { class: "mx-meter-track" }, [masterFill])]),
+      el("div", { class: "mx-val", text: "polish on" }),
+      el("div", { class: "mx-master-chain", text: "trim · warm · glue · clip · limit" }),
+    ])
+  );
   sheet.appendChild(container);
 
   scrim.classList.add("open");
   sheet.classList.add("open");
+  if (focusTrack) {
+    setTimeout(() => sheet.querySelector(`.mx-strip[data-track="${focusTrack}"]`)?.scrollIntoView({ inline: "center", block: "nearest" }), 30);
+  }
+  updateTrackMixUI();
   const tick = () => {
     for (const t of TRACKS) {
       const lvl = Math.max(0, Math.min(1, (audio.meter(t.key) + 54) / 54));
@@ -647,6 +977,11 @@ function openMixer() {
         bar.style.transform = `scaleY(${lvl})`;
         bar._lvl = lvl;
       }
+    }
+    const mlvl = Math.max(0, Math.min(1, (audio.meter("master") + 54) / 54));
+    if (meterBars.master && Math.abs((meterBars.master._lvl || 0) - mlvl) > 0.01) {
+      meterBars.master.style.transform = `scaleY(${mlvl})`;
+      meterBars.master._lvl = mlvl;
     }
     mixerRAF = requestAnimationFrame(tick);
   };
@@ -978,16 +1313,16 @@ function arrMini(scene, track) {
 function ensureArrShell() {
   const arrEl = document.getElementById("arrangement");
   if (arrScroll) return;
-  const headers = el("div", { class: "arr-headers" }, [el("div", { class: "arr-corner" })]);
+  const headers = el("div", { class: "arr-headers" }, [el("div", { class: "arr-corner" }, [viewMixButton()])]);
   for (const t of ARRANGE_TRACKS) {
     const meta = TRACKS.find((x) => x.key === t);
-    headers.appendChild(
-      el("div", { class: "arr-thead", style: `--tc:${meta.color}` }, [
+    const head = el("div", { class: "arr-thead track-head", style: `--tc:${meta.color}`, "data-track": t }, [
         el("div", { class: "dot" }),
         el("div", { class: "nm", text: meta.name }),
-        el("div", { class: "ms" }, [el("b", { text: "M" }), el("b", { text: "S" })]),
-      ])
-    );
+        el("div", { class: "ms" }, [trackToggleButton(t, "mute"), trackToggleButton(t, "solo")]),
+      ]);
+    bindTrackHeader(head, t);
+    headers.appendChild(head);
   }
   arrScroll = el("div", { class: "arr-scroll" });
   attachPinch(arrScroll);
@@ -1054,6 +1389,7 @@ function renderArrangement() {
   arrScroll.appendChild(content);
   arrContentEl = content;
   updateArrToolbar();
+  updateTrackMixUI();
 }
 
 function barFromEvent(e) {
@@ -1250,7 +1586,7 @@ function attachPinch(scroll) {
 }
 
 // ---------------------------------------------------------------------------
-// WAV Export
+// Project + WAV Export
 // ---------------------------------------------------------------------------
 function encodeWav(buffer) {
   const numCh = buffer.numberOfChannels;
@@ -1288,17 +1624,127 @@ function downloadBlob(blob, name) {
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
+function projectDevices() {
+  return {
+    drums: { kit: audio.kit() },
+    harmony: { preset: audio.harmonyPreset() },
+    bass: { preset: audio.bassPreset() },
+    melody: { preset: audio.melodyPreset() },
+  };
+}
+
+function projectMix() {
+  return Object.fromEntries(TRACKS.map((t) => [t.key, structuredClone(mixState[t.key])]));
+}
+
+function captureProject() {
+  return {
+    schema: PROJECT_SCHEMA,
+    version: PROJECT_VERSION,
+    savedAt: new Date().toISOString(),
+    song: snapshot(),
+    mix: projectMix(),
+    devices: projectDevices(),
+  };
+}
+
+function downloadProject() {
+  const json = JSON.stringify(captureProject(), null, 2);
+  downloadBlob(new Blob([json], { type: "application/json" }), "noodles-project.noodles");
+}
+
+function restoreDevices(devices = {}) {
+  if (KIT_NAMES.includes(devices.drums?.kit)) audio.setKit(devices.drums.kit);
+  if (HARMONY_PRESET_NAMES.includes(devices.harmony?.preset)) audio.setHarmonyPreset(devices.harmony.preset);
+  if (BASS_PRESET_NAMES.includes(devices.bass?.preset)) audio.setBassPreset(devices.bass.preset);
+  if (MELODY_PRESET_NAMES.includes(devices.melody?.preset)) audio.setMelodyPreset(devices.melody.preset);
+}
+
+function restoreMix(mix = {}) {
+  for (const t of TRACKS) {
+    const key = t.key;
+    const defaults = MIX_DEFAULTS[key];
+    const src = mix[key] || {};
+    Object.assign(mixState[key], {
+      vol: Number.isFinite(Number(src.vol)) ? Number(src.vol) : defaults.vol,
+      pan: Number.isFinite(Number(src.pan)) ? Number(src.pan) : defaults.pan,
+      verb: Number.isFinite(Number(src.verb)) ? Number(src.verb) : Number.isFinite(Number(src.send)) ? Number(src.send) : defaults.verb,
+      echo: Number.isFinite(Number(src.echo)) ? Number(src.echo) : defaults.echo,
+      mute: !!src.mute,
+      solo: !!src.solo,
+    });
+  }
+  applyMixState();
+}
+
+function applyProject(rawProject) {
+  const project = rawProject?.schema === PROJECT_SCHEMA ? rawProject : { song: rawProject };
+  const nextSong = structuredClone(project.song);
+  if (!nextSong || !Array.isArray(nextSong.scenes) || !nextSong.scenes.length) {
+    throw new Error("Not a valid Noodles project.");
+  }
+  if (!nextSong.arrangement) nextSong.arrangement = {};
+  for (const t of TRACKS) if (!Array.isArray(nextSong.arrangement[t.key])) nextSong.arrangement[t.key] = [];
+  if (!nextSong.loop) nextSong.loop = { on: false, start: 0, len: 4 };
+  if (!Number.isFinite(Number(nextSong.tempo))) nextSong.tempo = 92;
+  if (!Number.isFinite(Number(nextSong.key))) nextSong.key = 0;
+  if (!nextSong.scale) nextSong.scale = "major";
+
+  pushUndo();
+  for (const key of Object.keys(song)) delete song[key];
+  Object.assign(song, nextSong);
+  restoreMix(project.mix);
+  restoreDevices(project.devices);
+  selClip = null;
+  arrPlayBar = 0;
+  refreshAll();
+}
+
+async function loadProjectFile(file, status) {
+  if (!file) return;
+  try {
+    applyProject(JSON.parse(await file.text()));
+    status.textContent = "Project loaded";
+  } catch (e) {
+    status.textContent = "Load failed: " + e.message;
+  }
+}
+
+function saveLocalProject(status) {
+  try {
+    localStorage.setItem(LOCAL_PROJECT_KEY, JSON.stringify(captureProject()));
+    status.textContent = "Local snapshot saved";
+  } catch (e) {
+    status.textContent = "Local save failed: " + e.message;
+  }
+}
+
+function loadLocalProject(status) {
+  try {
+    const raw = localStorage.getItem(LOCAL_PROJECT_KEY);
+    if (!raw) {
+      status.textContent = "No local snapshot yet";
+      return;
+    }
+    applyProject(JSON.parse(raw));
+    status.textContent = "Local snapshot loaded";
+  } catch (e) {
+    status.textContent = "Local load failed: " + e.message;
+  }
+}
+
 let exporting = false;
 function openExport() {
   editor = null;
   sheet.innerHTML = "";
   sheet.style.setProperty("--tc", "#e8b84b");
   const status = el("div", { class: "exp-status", text: "" });
+  const fileInput = el("input", { class: "project-file", type: "file", accept: ".noodles,application/json" });
+  fileInput.addEventListener("change", () => loadProjectFile(fileInput.files?.[0], status));
 
   async function doExport(mode) {
     if (exporting) return;
     exporting = true;
-    await ensureStarted();
     status.textContent = mode === "master" ? "Rendering master\u2026" : "Rendering stems\u2026";
     try {
       if (mode === "master") {
@@ -1323,14 +1769,29 @@ function openExport() {
     el("div", { class: "sheet-bar" }, [
       el("div", { class: "swatch" }),
       el("div", { class: "title", text: "Export" }),
-      el("div", { class: "sub", text: "WAV \u00b7 44.1 kHz \u00b7 16-bit" }),
+      el("div", { class: "sub", text: "project · WAV" }),
       el("div", { class: "close", text: "Done", onclick: closeEditor }),
     ])
   );
   sheet.appendChild(
-    el("div", { class: "exp-grid" }, [
-      el("div", { class: "exp-btn", text: "\uD83C\uDFB5  Master", onclick: () => doExport("master") }),
-      el("div", { class: "exp-btn", text: "\uD83C\uDFDA  Stems (4\u00d7)", onclick: () => doExport("stems") }),
+    el("div", { class: "propsection" }, [
+      el("div", { class: "proplabel", text: "project" }),
+      el("div", { class: "exp-grid" }, [
+        el("div", { class: "exp-btn", text: "Download Project", "data-action": "download-project", onclick: downloadProject }),
+        el("div", { class: "exp-btn", text: "Load Project", "data-action": "load-project", onclick: () => fileInput.click() }),
+        el("div", { class: "exp-btn", text: "Save Local", "data-action": "save-local-project", onclick: () => saveLocalProject(status) }),
+        el("div", { class: "exp-btn", text: "Load Local", "data-action": "load-local-project", onclick: () => loadLocalProject(status) }),
+      ]),
+      fileInput,
+    ])
+  );
+  sheet.appendChild(
+    el("div", { class: "propsection" }, [
+      el("div", { class: "proplabel", text: "audio" }),
+      el("div", { class: "exp-grid" }, [
+        el("div", { class: "exp-btn", text: "\uD83C\uDFB5  Master WAV", "data-action": "export-master-wav", onclick: () => doExport("master") }),
+        el("div", { class: "exp-btn", text: "\uD83C\uDFDA  Stems (4\u00d7)", "data-action": "export-stems", onclick: () => doExport("stems") }),
+      ]),
     ])
   );
   sheet.appendChild(status);

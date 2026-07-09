@@ -42,7 +42,7 @@ Pinch-into-a-chord is a novel gesture and the product's signature bet, but §7 c
 
 ## Still open (from handoff §9)
 
-- **Naming.** Codename is the builder's to pick. `pocket-instrument` is a placeholder directory name, meant to be renamed — it is not a proposal.
+- **Naming.** The repo is now named `noodles`. Keep the codebase and docs aligned with that name.
 - **Platform priority for the eventual native build:** iOS-first vs Android-first (web-first is settled for v0 per D2).
 - **Synth vs sample balance** for the full sound palette beyond the v0 default voice (P2).
 - **How much of Sonido** to pull in for the native port (D2 keeps it out of v0; the port depth is undecided).

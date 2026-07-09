@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A pocket instrument for harmony, rhythm, and melody. A playful sketchpad where the first pleasing sound is seconds away and the depth reveals itself only when you go looking. The bet, in one line: **the instrument is the lesson.** No teaching mode, no quiz, no "learn" tab bolted onto a toy. The affordances themselves carry the theory, so nobody feels taught.
+A phone-first music sketchpad for harmony, rhythm, and melody. The first pleasing sound is seconds away, and the depth reveals itself only when you go looking. The bet, in one line: **the instrument is the lesson.** No teaching mode, no quiz, no "learn" tab bolted onto a toy. The affordances themselves carry the theory, so nobody feels taught.
 
 Two acceptance scenarios decide whether any feature belongs. If it doesn't serve both, it's wrong:
 
@@ -15,7 +15,7 @@ The whole product lives or dies in the **first 30 seconds cold.** That loop is t
 
 ## Repository status
 
-A working prototype now lives at the repo root: a Vite + Tone.js + vanilla DOM/CSS app, phone-first, run with `npm run dev -- --host`. Working today: Session and Arrangement views, four clip editors (chords, drum rack, two piano rolls), a mixer, global key/scale, one-tap transforms, undo/redo, and per-clip launch modes. `ROADMAP.md` tracks what's next and the performance work. The directory name `pocket-instrument` is a placeholder; the real name is the builder's to pick (see `DECISIONS.md` → Still open).
+A working prototype now lives at the repo root: a Vite + Tone.js + vanilla DOM/CSS app, phone-first, run with `npm run dev -- --host`. Working today: Session and Arrangement views, four clip editors (chords, drum rack, two piano rolls), a mixer, global key/scale, one-tap transforms, undo/redo, and per-clip launch modes. `ROADMAP.md` tracks what's next and the performance work. The directory name is `noodles`.
 
 The build intentionally took the literal mobile-Ableton road (clip grid, launch-and-loop, direct drag), a pivot the builder chose over the original fractal "cold-open harmony playground" milestone in `HANDOFF.md` §7. Read `AGENTS.md` + `ROADMAP.md` for what the app is today; read `HANDOFF.md` + `DECISIONS.md` for the north star and the reasoning, which still hold (the instrument is the lesson; learning is pull; can't-make-it-wrong). Where surface detail disagrees, the code and `AGENTS.md` win; on *why*, `HANDOFF.md` wins.
 
@@ -71,4 +71,4 @@ Run from the repo root (the app moved up out of `prototype/`, so an old shell si
 
 ## A note on naming
 
-`pocket-instrument` (directory) and any identifiers derived from it are placeholders. The builder picks the real name. Don't bake the placeholder into anything hard to rename, and flag when a working name would genuinely help.
+`noodles` is the repo name. Keep new identifiers aligned with it and avoid reintroducing the old placeholder.

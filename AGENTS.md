@@ -1,4 +1,4 @@
-# Handoff — Pocket Instrument (a mobile Ableton-style DAW)
+# Handoff — Noodles (a mobile Ableton-style DAW)
 
 You (Codex / GPT-5.5) are taking over this project. This file is the current source of
 truth. Read it fully before touching code; then read `ROADMAP.md`. The other root docs
@@ -176,7 +176,7 @@ Plus tier-2 performance work listed in `ROADMAP.md` (diff-based cell repaints, p
 ## Stale docs — read for philosophy, not for what to build
 
 `HANDOFF.md`, `CLAUDE.md`, `DECISIONS.md`, `RESEARCH_FINDINGS.md` are from the project's
-**original** concept: a playful, glowy "living-light pocket instrument" (Pixi + bloom, three
+**original** concept: a playful, glowy "living-light" sketchpad (Pixi + bloom, three
 zoomable playgrounds). That aesthetic and paradigm were **dropped** after the builder clarified
 they wanted literal mobile Ableton. Keep from those docs: the design philosophy (learning
 through play, can't-make-it-wrong, no gamification), and the research (Ableton Note, Hooktheory
