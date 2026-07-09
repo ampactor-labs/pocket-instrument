@@ -8,6 +8,7 @@ const chrome = process.env.CHROME_BIN || "/usr/bin/google-chrome";
 const host = process.env.SMOKE_HOST || "127.0.0.1";
 const port = Number(process.env.SMOKE_PORT || 4173);
 const url = process.env.SMOKE_URL || `http://${host}:${port}/noodles/`;
+const exportTimeout = Number(process.env.SMOKE_EXPORT_TIMEOUT || 60000);
 const outDir = path.join(cwd, ".tmp");
 const shotPath = path.join(outDir, "smoke.png");
 const propsShotPath = path.join(outDir, "smoke-clip-props.png");
@@ -214,7 +215,7 @@ try {
   await page.waitForFunction(() => document.querySelector(".sheet-bar .title")?.textContent === "Mixer");
   const mixerText = await page.$eval("#sheet", (el) => el.textContent);
   assertState(mixerText.includes("echo"), "mixer missing echo send");
-  assertState(mixerText.includes("Master") && mixerText.includes("safe chain"), "mixer missing master strip");
+  assertState(mixerText.includes("Master") && mixerText.includes("0 dB top") && mixerText.includes("-6 dB"), "mixer missing master scale/default level");
   await tap(page, ".tbtn.play");
   const mixerStillOpen = await page.$eval("#sheet", (el) => el.classList.contains("open"));
   assertState(mixerStillOpen, "play/pause dismissed an open sheet");
@@ -230,7 +231,12 @@ try {
   await clickAction(page, "save-local-project");
   await page.waitForFunction(() => document.querySelector(".exp-status")?.textContent.includes("Local snapshot saved"));
   await page.evaluate(() => document.querySelector('[data-action="export-master-wav"]').click());
-  await page.waitForFunction(() => document.querySelector(".exp-status")?.textContent.includes("Master exported"), { timeout: 20000 });
+  try {
+    await page.waitForFunction(() => document.querySelector(".exp-status")?.textContent.includes("Master exported"), { timeout: exportTimeout });
+  } catch (e) {
+    const status = await page.$eval(".exp-status", (el) => el.textContent);
+    throw new Error(`export timed out; status="${status}"; errors=${errors.join(" | ") || "none"}`);
+  }
   await page.screenshot({ path: exportShotPath, fullPage: true });
   await closeSheet(page);
   await page.waitForFunction(() => !document.querySelector("#sheet")?.classList.contains("open"));

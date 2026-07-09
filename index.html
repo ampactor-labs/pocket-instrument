@@ -631,7 +631,7 @@
       }
       .cslot {
         flex: 1 1 0;
-        height: 60px;
+        height: 68px;
         background: color-mix(in srgb, var(--tc) 20%, #161616);
         border: 2px solid color-mix(in srgb, var(--tc) 35%, #000);
         border-radius: 8px;
@@ -645,6 +645,17 @@
       }
       .cslot b { font-size: 16px; }
       .cslot span { font-size: 10px; opacity: 0.6; font-weight: 600; margin-top: 2px; }
+      .chord-notes {
+        display: block;
+        margin-top: 3px;
+        font-style: normal;
+        font-size: 8px;
+        font-weight: 800;
+        line-height: 1;
+        opacity: 0.78;
+        letter-spacing: 0;
+        white-space: nowrap;
+      }
       .cslot.sel {
         outline: 2px solid #fff;
         z-index: 3;
@@ -656,6 +667,8 @@
       }
       .copt {
         border-radius: 6px;
+        min-height: 58px;
+        padding: 5px 2px;
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -667,6 +680,10 @@
       }
       .copt b { font-size: 16px; }
       .copt span { font-size: 10px; opacity: 0.8; font-weight: 600; margin-top: 2px; }
+      .copt .chord-notes {
+        font-size: 7px;
+        opacity: 0.82;
+      }
 
       /* Session / Arrangement toggle */
       .seg {
@@ -1004,6 +1021,7 @@
         width: 16px;
         height: 72px;
         background: #111;
+        border: 1px solid #000;
         border-radius: 4px;
         overflow: hidden;
         position: relative;
@@ -1018,6 +1036,7 @@
         inset: 0;
         display: flex;
         align-items: flex-end;
+        z-index: 1;
       }
       .mx-meter-track i {
         display: block;
@@ -1028,6 +1047,35 @@
         will-change: transform;
         background: linear-gradient(0deg, #4caf50, #e8b84b 70%, #d24b4b);
         border-radius: 3px;
+      }
+      .mx-meter-scale {
+        position: absolute;
+        inset: 2px;
+        z-index: 2;
+        pointer-events: none;
+        color: rgba(255, 255, 255, 0.72);
+        font-size: 7px;
+        font-weight: 900;
+        line-height: 1;
+        text-shadow: 0 1px 2px #000;
+      }
+      .mx-meter-scale::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 10%;
+        border-top: 1px solid rgba(255, 255, 255, 0.42);
+      }
+      .mx-meter-scale span {
+        position: absolute;
+        right: 1px;
+      }
+      .mx-meter-scale .mx-zero {
+        top: 0;
+      }
+      .mx-meter-scale .mx-ref {
+        top: calc(10% - 3px);
       }
       .mx-vfader {
         writing-mode: vertical-lr;

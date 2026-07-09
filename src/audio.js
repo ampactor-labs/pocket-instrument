@@ -10,6 +10,32 @@ const sixteenth = () => Tone.Time("16n").toSeconds();
 
 export const TRACK_KEYS = ["harmony", "drums", "bass", "melody"];
 
+const DEFAULT_TRACK_VOLUME_DB = -6;
+const SEND_OFF_DB = -60;
+const FIRST_PLAY_WARMUP_MS = 90;
+const SOURCE_LEVEL_DB = {
+  harmonyPad: -14,
+  harmonyHalo: -28,
+  harmonyRoot: -34,
+  bass: -6,
+  melody: -3,
+  kick: -8,
+  snare: -4,
+  hat: -10,
+  clap: -7,
+};
+const KICK_DUCK_GAIN = Tone.dbToGain(-8);
+const DRUM_PARALLEL_GAIN = Tone.dbToGain(-10);
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const sendGain = (db) => (db <= -59 ? 0 : Tone.dbToGain(db));
+
+function scheduleKickDuck(param, time) {
+  param.cancelScheduledValues(time);
+  param.setValueAtTime(1, time);
+  param.linearRampToValueAtTime(KICK_DUCK_GAIN, time + 0.008);
+  param.exponentialRampToValueAtTime(1, time + 0.22);
+}
+
 // --- Device presets (3 per track, like drum kits) ---
 const HARMONY_PRESETS = {
   pad:     { osc: "sawtooth", filter: 1200, attack: 0.35, decay: 1.5, sustain: 0.8, release: 1.2, chorusWet: 0.4, chorusDepth: 0.7 },
@@ -84,6 +110,17 @@ export function createAudio(song) {
   const reverb = new Tone.Freeverb({ roomSize: 0.72, dampening: 2600, wet: 1 }).connect(master);
   const echo = new Tone.FeedbackDelay({ delayTime: "8n", feedback: 0.26, wet: 1 }).connect(master);
   const echoReturn = new Tone.Gain(Tone.dbToGain(-4)).connect(echo);
+  const musicDuck = new Tone.Gain(1).connect(master);
+  const drumDry = new Tone.Gain(Tone.dbToGain(-1)).connect(master);
+  const drumParallel = new Tone.Compressor({
+    threshold: -24,
+    ratio: 4.5,
+    attack: 0.004,
+    release: 0.13,
+    knee: 12,
+  });
+  const drumParallelReturn = new Tone.Gain(DRUM_PARALLEL_GAIN).connect(master);
+  drumParallel.connect(drumParallelReturn);
 
   // Mixer strips — direct gain wiring (no send/receive bus, which can silently
   // fail depending on Tone.js version and context lifecycle).
@@ -91,16 +128,27 @@ export function createAudio(song) {
   const meters = {};
   const verbSends = {};
   const echoSends = {};
+  const channelState = Object.fromEntries(TRACK_KEYS.map((track) => [track, {
+    vol: DEFAULT_TRACK_VOLUME_DB,
+    pan: 0,
+    verb: SEND_OFF_DB,
+    echo: SEND_OFF_DB,
+    mute: false,
+    solo: false,
+  }]));
   const muteState = Object.fromEntries(TRACK_KEYS.map((track) => [track, false]));
   const soloState = Object.fromEntries(TRACK_KEYS.map((track) => [track, false]));
-  const verbDefault = { harmony: -60, melody: -60, drums: -60, bass: -60 };
-  const echoDefault = { harmony: -60, melody: -60, drums: -60, bass: -60 };
-  const duckGain = new Tone.Gain(1).connect(master);
+  const verbDefault = { harmony: SEND_OFF_DB, melody: SEND_OFF_DB, drums: SEND_OFF_DB, bass: SEND_OFF_DB };
+  const echoDefault = { harmony: SEND_OFF_DB, melody: SEND_OFF_DB, drums: SEND_OFF_DB, bass: SEND_OFF_DB };
   for (const k of TRACK_KEYS) {
-    const chVol = 0;
+    const chVol = DEFAULT_TRACK_VOLUME_DB;
     channels[k] = new Tone.Channel({ volume: chVol, pan: 0 });
-    if (k === "drums") channels[k].connect(master);
-    else channels[k].connect(duckGain);
+    if (k === "drums") {
+      channels[k].connect(drumDry);
+      channels[k].connect(drumParallel);
+    } else {
+      channels[k].connect(musicDuck);
+    }
     meters[k] = new Tone.Meter();
     channels[k].connect(meters[k]);
     // Direct gain nodes wired to the effects instead of the send/receive bus
@@ -118,16 +166,18 @@ export function createAudio(song) {
 
   // Harmony: lush pad.
   const chorus = new Tone.Chorus({ frequency: 0.4, delayTime: 4, depth: 0.6, wet: 0.35 }).start();
+  const padHighpass = new Tone.Filter({ type: "highpass", frequency: 170, Q: 0.6 });
   const padFilter = new Tone.Filter({ type: "lowpass", frequency: 1500, Q: 0.7 });
   new Tone.LFO({ frequency: 0.05, min: 850, max: 2600 }).connect(padFilter.frequency).start();
+  padHighpass.connect(padFilter);
   padFilter.connect(chorus);
   chorus.connect(channels.harmony);
   const pad = new Tone.PolySynth(Tone.Synth, {
     maxPolyphony: 4,
     oscillator: { type: "sawtooth" },
     envelope: { attack: 0.28, decay: 1.1, sustain: 0.72, release: 1.0 },
-    volume: -16,
-  }).connect(padFilter);
+    volume: SOURCE_LEVEL_DB.harmonyPad,
+  }).connect(padHighpass);
 
   let harmonyPreset = "keys";
   function applyHarmonyPreset(name) {
@@ -142,28 +192,32 @@ export function createAudio(song) {
   const halo = new Tone.Synth({
     oscillator: { type: "sine" },
     envelope: { attack: 0.9, decay: 1, sustain: 0.5, release: 1.6 },
-    volume: -26,
+    volume: SOURCE_LEVEL_DB.harmonyHalo,
   }).connect(channels.harmony);
+  const rootHintFilter = new Tone.Filter({ type: "highpass", frequency: 120, Q: 0.7 }).connect(channels.harmony);
+  // A quiet low-mid root hint, not a sub-bass voice. Bass owns the low end.
   const sub = new Tone.Synth({
     oscillator: { type: "sine" },
     envelope: { attack: 0.08, decay: 0.4, sustain: 0.85, release: 1.6 },
-    volume: -13,
-  }).connect(channels.harmony);
+    volume: SOURCE_LEVEL_DB.harmonyRoot,
+  }).connect(rootHintFilter);
 
   // Bass + lead — device params live-adjustable.
-  const bassFilter = new Tone.Filter({ type: "lowpass", frequency: 750, Q: 0.9 }).connect(channels.bass);
+  const bassHighpass = new Tone.Filter({ type: "highpass", frequency: 34, Q: 0.7 }).connect(channels.bass);
+  const bassFilter = new Tone.Filter({ type: "lowpass", frequency: 750, Q: 0.9 }).connect(bassHighpass);
   const bassTrk = new Tone.PolySynth(Tone.Synth, {
     maxPolyphony: 6,
     oscillator: { type: "sawtooth" },
     envelope: { attack: 0.02, decay: 0.2, sustain: 0.6, release: 0.25 },
-    volume: -10,
+    volume: SOURCE_LEVEL_DB.bass,
   }).connect(bassFilter);
-  const leadFilter = new Tone.Filter({ type: "lowpass", frequency: 3200, Q: 0.6 }).connect(channels.melody);
+  const leadHighpass = new Tone.Filter({ type: "highpass", frequency: 180, Q: 0.7 }).connect(channels.melody);
+  const leadFilter = new Tone.Filter({ type: "lowpass", frequency: 3200, Q: 0.6 }).connect(leadHighpass);
   const lead = new Tone.PolySynth(Tone.Synth, {
     maxPolyphony: 8,
     oscillator: { type: "triangle" },
     envelope: { attack: 0.01, decay: 0.16, sustain: 0.35, release: 0.3 },
-    volume: -14,
+    volume: SOURCE_LEVEL_DB.melody,
   }).connect(leadFilter);
   const devices = {
     bass: { synth: bassTrk, filter: bassFilter, wave: "sawtooth", cutoff: 750, preset: "deep" },
@@ -184,15 +238,16 @@ export function createAudio(song) {
   }
 
   // Kit.
-  const kick = new Tone.MembraneSynth({ volume: -2 }).connect(channels.drums);
-  const snareFilter = new Tone.Filter({ type: "highpass", frequency: 1400 }).connect(channels.drums);
-  const snare = new Tone.NoiseSynth({ noise: { type: "white" }, volume: -10 }).connect(snareFilter);
+  const kickFilter = new Tone.Filter({ type: "lowpass", frequency: 1800, Q: 0.5 }).connect(channels.drums);
+  const kick = new Tone.MembraneSynth({ volume: SOURCE_LEVEL_DB.kick }).connect(kickFilter);
+  const snareFilter = new Tone.Filter({ type: "highpass", frequency: 950 }).connect(channels.drums);
+  const snare = new Tone.NoiseSynth({ noise: { type: "white" }, volume: SOURCE_LEVEL_DB.snare }).connect(snareFilter);
   // Tight garage hat as a filtered noise burst (was MetalSynth: 6 FM oscillators
   // on the most-triggered voice — the priciest drum in the kit).
   const hatFilter = new Tone.Filter({ type: "highpass", frequency: 7500 }).connect(channels.drums);
-  const hat = new Tone.NoiseSynth({ noise: { type: "white" }, envelope: { attack: 0.001, decay: 0.02, sustain: 0 }, volume: -14 }).connect(hatFilter);
+  const hat = new Tone.NoiseSynth({ noise: { type: "white" }, envelope: { attack: 0.001, decay: 0.02, sustain: 0 }, volume: SOURCE_LEVEL_DB.hat }).connect(hatFilter);
   const clapFilter = new Tone.Filter({ type: "bandpass", frequency: 1400, Q: 1.2 }).connect(channels.drums);
-  const clap = new Tone.NoiseSynth({ noise: { type: "pink" }, volume: -12 }).connect(clapFilter);
+  const clap = new Tone.NoiseSynth({ noise: { type: "pink" }, volume: SOURCE_LEVEL_DB.clap }).connect(clapFilter);
 
   let kitName = "clean";
   function applyKit(name) {
@@ -212,7 +267,7 @@ export function createAudio(song) {
     prevVoiced = voiced;
     pad.triggerAttackRelease(voiced.map(midiToFreq), "1n", time);
     halo.triggerAttackRelease(midiToFreq(Math.max(...voiced) + 12), "1n", time);
-    sub.triggerAttackRelease(midiToFreq(36 + CHORDS[ci].pcs[0]), "1n", time);
+    sub.triggerAttackRelease(midiToFreq(48 + CHORDS[ci].pcs[0]), "1n", time);
   }
   function playNoteStack(track, slot, time) {
     const synth = track === "bass" ? bassTrk : lead;
@@ -222,7 +277,10 @@ export function createAudio(song) {
     }
   }
   function hitDrum(v, time) {
-    if (v === "kick") kick.triggerAttackRelease("C1", "8n", time);
+    if (v === "kick") {
+      scheduleKickDuck(musicDuck.gain, time);
+      kick.triggerAttackRelease("C1", "8n", time);
+    }
     else if (v === "snare") snare.triggerAttackRelease("16n", time);
     else if (v === "clap") clap.triggerAttackRelease("16n", time);
     else hat.triggerAttackRelease("32n", time);
@@ -230,7 +288,7 @@ export function createAudio(song) {
   function preview(ci) {
     const voiced = voiceLead(CHORDS[ci].pcs, prevVoiced);
     pad.triggerAttackRelease(voiced.map(midiToFreq), "2n", Tone.now());
-    sub.triggerAttackRelease(midiToFreq(36 + CHORDS[ci].pcs[0]), "2n", Tone.now());
+    sub.triggerAttackRelease(midiToFreq(48 + CHORDS[ci].pcs[0]), "2n", Tone.now());
   }
 
   // Transport.
@@ -416,10 +474,10 @@ export function createAudio(song) {
       playNoteStack(track, scene[track][stepInBar], time);
     }
 
+    const progressCurrent = getTrackProgress();
+    const queuedCurrent = getQueuedTracks();
+    draw.schedule(() => visualCb({ type: "step", scene: curScene, localStep: visualBar * 16 + visualStep, stepInBar: visualStep, bar: visualBar, activeScenes: activeBefore, queuedTracks: queuedCurrent, progress: progressCurrent }), time);
     for (const track of TRACK_KEYS) advanceSceneTrack(track);
-    const activeAfter = activeScenes();
-    const queuedAfter = getQueuedTracks();
-    draw.schedule(() => visualCb({ type: "step", scene: curScene, localStep: visualBar * 16 + visualStep, stepInBar: visualStep, bar: visualBar, activeScenes: activeAfter, queuedTracks: queuedAfter, progress: getTrackProgress() }), time);
   }, "16n");
 
   let playing = false;
@@ -430,11 +488,13 @@ export function createAudio(song) {
       if (inited) return;
       inited = true;
       await Tone.start();
+      if (Tone.getContext().state !== "running") await Tone.getContext().resume();
+      await wait(FIRST_PLAY_WARMUP_MS);
       if (reverb.ready) await reverb.ready;
       clock.start(0);
     },
     play() {
-      transport.start();
+      transport.start("+0.02");
       playing = true;
     },
     stop() {
@@ -525,27 +585,33 @@ export function createAudio(song) {
     },
     // --- mixer ---
     setVol(track, db) {
+      if (channelState[track]) channelState[track].vol = db;
       channels[track].volume.value = db;
     },
     setPan(track, p) {
+      if (channelState[track]) channelState[track].pan = p;
       channels[track].pan.value = p;
     },
     setSend(track, db) {
-      const v = db <= -59 ? 0 : Tone.dbToGain(db);
+      if (channelState[track]) channelState[track].verb = db;
+      const v = sendGain(db);
       verbSends[track].gain.rampTo(v, 0.02);
     },
     setEcho(track, db) {
-      const v = db <= -59 ? 0 : Tone.dbToGain(db);
+      if (channelState[track]) channelState[track].echo = db;
+      const v = sendGain(db);
       echoSends[track].gain.rampTo(v, 0.02);
     },
     setMute(track, on) {
       if (!(track in channels)) return;
       muteState[track] = !!on;
+      if (channelState[track]) channelState[track].mute = !!on;
       applyTrackGates();
     },
     setSolo(track, on) {
       if (!(track in channels)) return;
       soloState[track] = !!on;
+      if (channelState[track]) channelState[track].solo = !!on;
       applyTrackGates();
     },
     meter(track) {
@@ -601,42 +667,57 @@ export function createAudio(song) {
         offSat.wet.value = 0.60;
         const offMaster = new Tone.Gain(Tone.dbToGain(-3)).connect(offSat);
         const offDuckGain = new Tone.Gain(1).connect(offMaster);
+        const offDrumDry = new Tone.Gain(Tone.dbToGain(-1)).connect(offMaster);
+        const offDrumParallel = new Tone.Compressor({ threshold: -24, ratio: 4.5, attack: 0.004, release: 0.13, knee: 12 });
+        const offDrumParallelReturn = new Tone.Gain(DRUM_PARALLEL_GAIN).connect(offMaster);
+        offDrumParallel.connect(offDrumParallelReturn);
         const offReverb = new Tone.Freeverb({ roomSize: 0.72, dampening: 2600, wet: 1 }).connect(offMaster);
         const offEchoReturn = new Tone.Gain(Tone.dbToGain(-4)).connect(offMaster);
         const offEcho = new Tone.FeedbackDelay({ delayTime: "8n", feedback: 0.26, wet: 1 }).connect(offEchoReturn);
         const offCh = {};
+        const anySolo = TRACK_KEYS.some((track) => channelState[track].solo);
         for (const k of TRACK_KEYS) {
-          const muted = soloTrack && k !== soloTrack;
-          offCh[k] = new Tone.Channel({ volume: muted ? -Infinity : chState[k].vol, pan: chState[k].pan, mute: muted });
-          if (k === "drums") offCh[k].connect(offMaster);
-          else offCh[k].connect(offDuckGain);
-          offCh[k].connect(new Tone.Gain(Tone.dbToGain(chState[k].verb ?? verbDefault[k])).connect(offReverb));
-          offCh[k].connect(new Tone.Gain(Tone.dbToGain(chState[k].echo ?? echoDefault[k])).connect(offEcho));
+          const st = channelState[k];
+          const muted = soloTrack ? k !== soloTrack : st.mute || (anySolo && !st.solo);
+          offCh[k] = new Tone.Channel({ volume: muted ? -Infinity : st.vol, pan: st.pan, mute: muted });
+          if (k === "drums") {
+            offCh[k].connect(offDrumDry);
+            offCh[k].connect(offDrumParallel);
+          } else {
+            offCh[k].connect(offDuckGain);
+          }
+          offCh[k].connect(new Tone.Gain(sendGain(st.verb ?? verbDefault[k])).connect(offReverb));
+          offCh[k].connect(new Tone.Gain(sendGain(st.echo ?? echoDefault[k])).connect(offEcho));
         }
 
         const hp = HARMONY_PRESETS[harmonyPreset] || HARMONY_PRESETS.keys;
+        const offPadHp = new Tone.Filter({ type: "highpass", frequency: 170, Q: 0.6 });
         const offPadF = new Tone.Filter({ type: "lowpass", frequency: hp.filter, Q: 0.7 });
         const offChorus = new Tone.Chorus({ frequency: 0.4, delayTime: 4, depth: hp.chorusDepth, wet: hp.chorusWet }).start();
-        offPadF.connect(offChorus); offChorus.connect(offCh.harmony);
-        const offPad = new Tone.PolySynth(Tone.Synth, { maxPolyphony: 4, oscillator: { type: hp.osc }, envelope: { attack: hp.attack, decay: hp.decay, sustain: hp.sustain, release: hp.release }, volume: -16 }).connect(offPadF);
-        const offHalo = new Tone.Synth({ oscillator: { type: "sine" }, envelope: { attack: 0.9, decay: 1, sustain: 0.5, release: 1.6 }, volume: -26 }).connect(offCh.harmony);
-        const offSub = new Tone.Synth({ oscillator: { type: "sine" }, envelope: { attack: 0.08, decay: 0.4, sustain: 0.85, release: 1.6 }, volume: -13 }).connect(offCh.harmony);
+        offPadHp.connect(offPadF); offPadF.connect(offChorus); offChorus.connect(offCh.harmony);
+        const offPad = new Tone.PolySynth(Tone.Synth, { maxPolyphony: 4, oscillator: { type: hp.osc }, envelope: { attack: hp.attack, decay: hp.decay, sustain: hp.sustain, release: hp.release }, volume: SOURCE_LEVEL_DB.harmonyPad }).connect(offPadHp);
+        const offHalo = new Tone.Synth({ oscillator: { type: "sine" }, envelope: { attack: 0.9, decay: 1, sustain: 0.5, release: 1.6 }, volume: SOURCE_LEVEL_DB.harmonyHalo }).connect(offCh.harmony);
+        const offRootHp = new Tone.Filter({ type: "highpass", frequency: 120, Q: 0.7 }).connect(offCh.harmony);
+        const offSub = new Tone.Synth({ oscillator: { type: "sine" }, envelope: { attack: 0.08, decay: 0.4, sustain: 0.85, release: 1.6 }, volume: SOURCE_LEVEL_DB.harmonyRoot }).connect(offRootHp);
 
-        const bp = BASS_PRESETS[bassPreset] || BASS_PRESETS.deep;
-        const offBF = new Tone.Filter({ type: "lowpass", frequency: bp.cutoff, Q: 0.9 }).connect(offCh.bass);
-        const offBass = new Tone.PolySynth(Tone.Synth, { maxPolyphony: 6, oscillator: { type: bp.wave }, envelope: { attack: bp.attack, decay: bp.decay, sustain: bp.sustain, release: bp.release }, volume: -10 }).connect(offBF);
+        const bp = BASS_PRESETS[devices.bass.preset] || BASS_PRESETS.deep;
+        const offBHp = new Tone.Filter({ type: "highpass", frequency: 34, Q: 0.7 }).connect(offCh.bass);
+        const offBF = new Tone.Filter({ type: "lowpass", frequency: bp.cutoff, Q: 0.9 }).connect(offBHp);
+        const offBass = new Tone.PolySynth(Tone.Synth, { maxPolyphony: 6, oscillator: { type: bp.wave }, envelope: { attack: bp.attack, decay: bp.decay, sustain: bp.sustain, release: bp.release }, volume: SOURCE_LEVEL_DB.bass }).connect(offBF);
 
-        const mp = MELODY_PRESETS[melodyPreset] || MELODY_PRESETS.lead;
-        const offLF = new Tone.Filter({ type: "lowpass", frequency: mp.cutoff, Q: 0.6 }).connect(offCh.melody);
-        const offLead = new Tone.PolySynth(Tone.Synth, { maxPolyphony: 8, oscillator: { type: mp.wave }, envelope: { attack: mp.attack, decay: mp.decay, sustain: mp.sustain, release: mp.release }, volume: -14 }).connect(offLF);
+        const mp = MELODY_PRESETS[devices.melody.preset] || MELODY_PRESETS.lead;
+        const offLHp = new Tone.Filter({ type: "highpass", frequency: 180, Q: 0.7 }).connect(offCh.melody);
+        const offLF = new Tone.Filter({ type: "lowpass", frequency: mp.cutoff, Q: 0.6 }).connect(offLHp);
+        const offLead = new Tone.PolySynth(Tone.Synth, { maxPolyphony: 8, oscillator: { type: mp.wave }, envelope: { attack: mp.attack, decay: mp.decay, sustain: mp.sustain, release: mp.release }, volume: SOURCE_LEVEL_DB.melody }).connect(offLF);
 
-        const offKick = new Tone.MembraneSynth({ volume: -2 }).connect(offCh.drums);
-        const offSnF = new Tone.Filter({ type: "highpass", frequency: 1400 }).connect(offCh.drums);
-        const offSnare = new Tone.NoiseSynth({ noise: { type: "white" }, volume: -10 }).connect(offSnF);
+        const offKickF = new Tone.Filter({ type: "lowpass", frequency: 1800, Q: 0.5 }).connect(offCh.drums);
+        const offKick = new Tone.MembraneSynth({ volume: SOURCE_LEVEL_DB.kick }).connect(offKickF);
+        const offSnF = new Tone.Filter({ type: "highpass", frequency: 950 }).connect(offCh.drums);
+        const offSnare = new Tone.NoiseSynth({ noise: { type: "white" }, volume: SOURCE_LEVEL_DB.snare }).connect(offSnF);
         const offHatF = new Tone.Filter({ type: "highpass", frequency: 7500 }).connect(offCh.drums);
-        const offHat = new Tone.NoiseSynth({ noise: { type: "white" }, envelope: { attack: 0.001, decay: 0.02, sustain: 0 }, volume: -14 }).connect(offHatF);
+        const offHat = new Tone.NoiseSynth({ noise: { type: "white" }, envelope: { attack: 0.001, decay: 0.02, sustain: 0 }, volume: SOURCE_LEVEL_DB.hat }).connect(offHatF);
         const offClF = new Tone.Filter({ type: "bandpass", frequency: 1400, Q: 1.2 }).connect(offCh.drums);
-        const offClap = new Tone.NoiseSynth({ noise: { type: "pink" }, volume: -12 }).connect(offClF);
+        const offClap = new Tone.NoiseSynth({ noise: { type: "pink" }, volume: SOURCE_LEVEL_DB.clap }).connect(offClF);
 
         let offPrev = null;
         const offSix = () => Tone.Time("16n").toSeconds();
@@ -655,7 +736,7 @@ export function createAudio(song) {
                 offPrev = v;
                 offPad.triggerAttackRelease(v.map(midiToFreq), "1n", time);
                 offHalo.triggerAttackRelease(midiToFreq(Math.max(...v) + 12), "1n", time);
-                offSub.triggerAttackRelease(midiToFreq(36 + CHORDS[ci].pcs[0]), "1n", time);
+                offSub.triggerAttackRelease(midiToFreq(48 + CHORDS[ci].pcs[0]), "1n", time);
               }
             }
           }
@@ -666,10 +747,7 @@ export function createAudio(song) {
               if (sc.drums[v][sib]) { 
                 const kParams = KITS[kitName];
                 if (v === "kick") {
-                  offDuckGain.gain.cancelScheduledValues(time);
-                  offDuckGain.gain.setValueAtTime(1, time);
-                  offDuckGain.gain.exponentialRampToValueAtTime(0.2, time + 0.01);
-                  offDuckGain.gain.exponentialRampToValueAtTime(1, time + 0.25);
+                  scheduleKickDuck(offDuckGain.gain, time);
                   offKick.set({ pitchDecay: kParams.kick.pitchDecay, octaves: kParams.kick.octaves, envelope: kParams.kick.envelope });
                   offKick.triggerAttackRelease("C1", "8n", time); 
                 } else if (v === "snare") {

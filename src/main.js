@@ -68,6 +68,23 @@ const TRACKS = [
   { key: "melody", name: "Melody", color: "#7bc86c" },
 ];
 const trackColor = (k) => TRACKS.find((t) => t.key === k).color;
+const DEFAULT_TRACK_VOLUME_DB = -6;
+const METER_MIN_DB = -60;
+const METER_MAX_DB = 0;
+const TRACK_VOLUME_MIN_DB = -36;
+const TRACK_VOLUME_MAX_DB = 0;
+const clampTrackDb = (db) => Math.max(TRACK_VOLUME_MIN_DB, Math.min(TRACK_VOLUME_MAX_DB, Math.round(db)));
+const formatDb = (db) => `${db > 0 ? "+" : ""}${db} dB`;
+const meterLevel = (db) => {
+  if (!Number.isFinite(db)) return 0;
+  return Math.max(0, Math.min(1, (db - METER_MIN_DB) / (METER_MAX_DB - METER_MIN_DB)));
+};
+const chordNotes = (ci) => CHORDS[ci] ? CHORDS[ci].pcs.map(pcName).join(" ") : "";
+function chordMarkup(ci, { notes = false } = {}) {
+  const ch = CHORDS[ci];
+  if (!ch) return "";
+  return `<b>${ch.roman}</b><span>${ch.name}</span>${notes ? `<em class="chord-notes">${chordNotes(ci)}</em>` : ""}`;
+}
 
 const song = makeSong();
 setScaleContext(song.key, song.scale);
@@ -553,10 +570,7 @@ function clipContent(scene, track) {
     if (!scene.harmony || scene.harmony.length === 0) return null;
     return el("div", { 
       class: "harmony-mini", 
-      html: scene.harmony.map((ci) => {
-        const ch = CHORDS[ci];
-        return ch ? `<div><b>${ch.roman}</b><span>${ch.name}</span></div>` : "";
-      }).join("") 
+      html: scene.harmony.map((ci) => `<div>${chordMarkup(ci)}</div>`).join("")
     });
   }
   if (track === "drums") {
@@ -1066,10 +1080,10 @@ function openClipProps(sceneIndex, track) {
 // ---------------------------------------------------------------------------
 let mixerRAF = 0;
 const MIX_DEFAULTS = {
-  harmony: { vol: 0, pan: 0, verb: -60, echo: -60, mute: false, solo: false },
-  drums: { vol: 0, pan: 0, verb: -60, echo: -60, mute: false, solo: false },
-  bass: { vol: 0, pan: 0, verb: -60, echo: -60, mute: false, solo: false },
-  melody: { vol: 0, pan: 0, verb: -60, echo: -60, mute: false, solo: false },
+  harmony: { vol: DEFAULT_TRACK_VOLUME_DB, pan: 0, verb: -60, echo: -60, mute: false, solo: false },
+  drums: { vol: DEFAULT_TRACK_VOLUME_DB, pan: 0, verb: -60, echo: -60, mute: false, solo: false },
+  bass: { vol: DEFAULT_TRACK_VOLUME_DB, pan: 0, verb: -60, echo: -60, mute: false, solo: false },
+  melody: { vol: DEFAULT_TRACK_VOLUME_DB, pan: 0, verb: -60, echo: -60, mute: false, solo: false },
 };
 const mixState = structuredClone(MIX_DEFAULTS);
 
@@ -1131,6 +1145,7 @@ function knob(label, min, max, step, val, onChange, format = (v) => v) {
 function applyTrackMix(track) {
   const ms = mixState[track];
   if (!ms) return;
+  ms.vol = clampTrackDb(ms.vol);
   audio.setVol(track, ms.vol);
   audio.setPan(track, ms.pan);
   audio.setSend(track, ms.verb);
@@ -1228,6 +1243,15 @@ function viewMixButton() {
     },
   });
 }
+function meterNode(fill) {
+  return el("div", { class: "mx-meter" }, [
+    el("div", { class: "mx-meter-scale" }, [
+      el("span", { class: "mx-zero", text: "0" }),
+      el("span", { class: "mx-ref", text: "-6" }),
+    ]),
+    el("div", { class: "mx-meter-track" }, [fill]),
+  ]);
+}
 function bindTrackHeader(node, track) {
   let timer = 0;
   let longPressed = false;
@@ -1324,13 +1348,14 @@ function openMixer(focusTrack = null) {
   for (const t of TRACKS) {
     const k = t.key;
     const ms = mixState[k];
+    ms.vol = clampTrackDb(ms.vol);
     const meterFill = el("i");
     meterBars[k] = meterFill;
-    const meter = el("div", { class: "mx-meter" }, [el("div", { class: "mx-meter-track" }, [meterFill])]);
+    const meter = meterNode(meterFill);
 
-    const volSlider = el("input", { type: "range", min: "-18", max: "6", step: "1", value: String(ms.vol), class: "mx-vfader" });
-    const volLabel = el("div", { class: "mx-val", text: `${ms.vol}` });
-    volSlider.addEventListener("input", () => { ms.vol = parseFloat(volSlider.value); audio.setVol(k, ms.vol); volLabel.textContent = `${ms.vol}`; });
+    const volSlider = el("input", { type: "range", min: String(TRACK_VOLUME_MIN_DB), max: String(TRACK_VOLUME_MAX_DB), step: "1", value: String(ms.vol), class: "mx-vfader" });
+    const volLabel = el("div", { class: "mx-val", text: formatDb(ms.vol) });
+    volSlider.addEventListener("input", () => { ms.vol = clampTrackDb(parseFloat(volSlider.value)); audio.setVol(k, ms.vol); volLabel.textContent = formatDb(ms.vol); });
 
     const panSlider = knob("pan", -1, 1, 0.05, ms.pan, (v) => { ms.pan = v; audio.setPan(k, v); }, (v) => (v === 0 ? "C" : v < 0 ? `L${Math.round(-v * 100)}` : `R${Math.round(v * 100)}`));
     const verbSlider = knob("verb", -60, 0, 1, ms.verb, (v) => { ms.verb = v; audio.setSend(k, v); });
@@ -1378,7 +1403,8 @@ function openMixer(focusTrack = null) {
   container.appendChild(
     el("div", { class: "mx-strip mx-master", style: "--tc:#d2d2d4", "data-track": "master" }, [
       el("div", { class: "mx-name" }, [el("span", { class: "mx-dot" }), el("span", { text: "Master" })]),
-      el("div", { class: "mx-meter" }, [el("div", { class: "mx-meter-track" }, [masterFill])]),
+      meterNode(masterFill),
+      el("div", { class: "mx-master-chain", text: "0 dB top" }),
     ])
   );
   sheet.appendChild(container);
@@ -1391,14 +1417,14 @@ function openMixer(focusTrack = null) {
   updateTrackMixUI();
   const tick = () => {
     for (const t of TRACKS) {
-      const lvl = Math.max(0, Math.min(1, (audio.meter(t.key) + 54) / 54));
+      const lvl = meterLevel(audio.meter(t.key));
       const bar = meterBars[t.key];
       if (bar && Math.abs((bar._lvl || 0) - lvl) > 0.01) {
         bar.style.transform = `scaleY(${lvl})`;
         bar._lvl = lvl;
       }
     }
-    const mlvl = Math.max(0, Math.min(1, (audio.meter("master") + 54) / 54));
+    const mlvl = meterLevel(audio.meter("master"));
     if (meterBars.master && Math.abs((meterBars.master._lvl || 0) - mlvl) > 0.01) {
       meterBars.master.style.transform = `scaleY(${mlvl})`;
       meterBars.master._lvl = mlvl;
@@ -1725,7 +1751,7 @@ function buildHarmonyEditor(sceneIndex, scene) {
     const slot = el("div", {
       class: "cslot" + (idx === 0 ? " sel" : ""),
       style: `--tc:${trackColor("harmony")}`,
-      html: `<b>${CHORDS[ci].roman}</b><span>${CHORDS[ci].name}</span>`,
+      html: chordMarkup(ci, { notes: true }),
       onclick: () => {
         selected = idx;
         slots.forEach((s, k) => s.classList.toggle("sel", k === idx));
@@ -1742,12 +1768,12 @@ function buildHarmonyEditor(sceneIndex, scene) {
       el("div", {
         class: "copt",
         style: `background:${chordHex(ci)}`,
-        html: `<b>${ch.roman}</b><span>${ch.name}</span>`,
+        html: chordMarkup(ci, { notes: true }),
         onclick: async () => {
           await ensureStarted();
           pushUndo();
           scene.harmony[selected] = ci;
-          slots[selected].innerHTML = `<b>${ch.roman}</b><span>${ch.name}</span>`;
+          slots[selected].innerHTML = chordMarkup(ci, { notes: true });
           audio.preview(ci);
           refreshClip(sceneIndex, "harmony");
         },
@@ -1784,7 +1810,7 @@ let arrPlayhead = null;
 
 function arrMini(scene, track) {
   if (track === "harmony") {
-    return el("div", { class: "arr-harmony-mini", html: scene.harmony.map((c) => `<div><b>${CHORDS[c].roman}</b><span>${CHORDS[c].name}</span></div>`).join("") });
+    return el("div", { class: "arr-harmony-mini", html: scene.harmony.map((c) => `<div>${chordMarkup(c)}</div>`).join("") });
   }
   if (track === "drums") {
     const mini = el("div", { class: "cmini" });
@@ -2159,8 +2185,9 @@ function restoreMix(mix = {}) {
     const key = t.key;
     const defaults = MIX_DEFAULTS[key];
     const src = mix[key] || {};
+    const srcVol = Number(src.vol);
     Object.assign(mixState[key], {
-      vol: Number.isFinite(Number(src.vol)) ? Number(src.vol) : defaults.vol,
+      vol: Number.isFinite(srcVol) ? clampTrackDb(srcVol) : defaults.vol,
       pan: Number.isFinite(Number(src.pan)) ? Number(src.pan) : defaults.pan,
       verb: Number.isFinite(Number(src.verb)) ? Number(src.verb) : Number.isFinite(Number(src.send)) ? Number(src.send) : defaults.verb,
       echo: Number.isFinite(Number(src.echo)) ? Number(src.echo) : defaults.echo,
@@ -2379,6 +2406,7 @@ audio.onVisual((e) => {
   }
 });
 
+applyMixState();
 renderTransport();
 renderSession();
 
