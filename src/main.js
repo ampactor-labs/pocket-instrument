@@ -11,6 +11,7 @@ import {
   FOLLOW_ACTIONS,
   chordColor,
   clipLaunch,
+  clipLengthBars,
   hslInt,
   makeSong,
   makeScene,
@@ -554,7 +555,9 @@ function clipContent(scene, track) {
 
 function launchBadge(scene, track) {
   const launch = clipLaunch(scene, track);
+  const bars = clipLengthBars(scene, track);
   const bits = [];
+  if (bars > 1) bits.push(`${bars}b`);
   if (launch.mode === "oneshot") bits.push("1x");
   if (launch.follow === "next") bits.push("next");
   else if (launch.follow === "prev") bits.push("prev");

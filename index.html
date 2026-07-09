@@ -364,24 +364,40 @@
       .clip.filled {
         background: color-mix(in srgb, var(--tc) 34%, #161616);
         border: 1px solid color-mix(in srgb, var(--tc) 50%, #000);
+        align-items: flex-start;
       }
-      .harmony-mini, .arr-harmony-mini {
+      .harmony-mini {
         display: flex;
-        gap: 8px;
+        flex-wrap: wrap;
+        gap: 3px 5px;
+        justify-content: center;
+        align-items: center;
+        width: 100%;
+        margin-top: 8px; /* clear the ▶ triangle */
+      }
+      .arr-harmony-mini {
+        display: flex;
+        gap: 16px;
         justify-content: center;
         align-items: center;
         width: 100%;
       }
-      .arr-harmony-mini {
-        gap: 16px;
+      .harmony-mini div {
+        display: flex;
+        flex-direction: column;
+        line-height: 1.1;
+        align-items: center;
+        min-width: 0;
       }
-      .harmony-mini div, .arr-harmony-mini div {
+      .arr-harmony-mini div {
         display: flex;
         flex-direction: column;
         line-height: 1.1;
       }
-      .harmony-mini b, .arr-harmony-mini b { font-size: 11px; }
-      .harmony-mini span, .arr-harmony-mini span { font-size: 8px; opacity: 0.65; font-weight: 500; }
+      .harmony-mini b { font-size: 10px; }
+      .harmony-mini span { font-size: 7px; opacity: 0.65; font-weight: 500; }
+      .arr-harmony-mini b { font-size: 11px; }
+      .arr-harmony-mini span { font-size: 8px; opacity: 0.65; font-weight: 500; }
       .clip.filled .tri {
         position: absolute;
         top: 5px;
