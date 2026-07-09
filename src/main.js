@@ -1454,6 +1454,7 @@ function buildDrumEditor(scene) {
   sheet.appendChild(tfd);
 
   const stepEls = {};
+  const scrollContainer = el("div", { class: "editor-scroll" });
   for (const v of DRUM_VOICES) {
     stepEls[v] = [];
     const steps = el("div", { class: "steps", style: "touch-action:none" });
@@ -1522,8 +1523,9 @@ function buildDrumEditor(scene) {
         audio.previewHit(v);
       },
     });
-    sheet.appendChild(el("div", { class: "drumrow" }, [pad, steps]));
+    scrollContainer.appendChild(el("div", { class: "drumrow" }, [pad, steps]));
   }
+  sheet.appendChild(scrollContainer);
   editor.stepEls = stepEls;
   editor.cursorCols = Array.from({ length: 16 }, (_, s) => DRUM_VOICES.map((v) => stepEls[v][s]));
 }
@@ -1540,21 +1542,6 @@ function buildPianoEditor(sceneIndex, scene, track) {
     while (m < base) m += 12;
     return m;
   };
-  const scrollToNotes = () => {
-    const sheetEl = document.getElementById("sheet");
-    const activeRow = sheetEl.querySelector(".pcell.on")?.closest(".prow");
-    if (activeRow) {
-      sheetEl.scrollTop = activeRow.offsetTop - sheetEl.clientHeight / 2 + activeRow.clientHeight / 2;
-    } else {
-      const defaultMidi = track === "bass" ? 36 : 60; // C2 or C4
-      const targetRi = rows.findIndex(m => m <= defaultMidi);
-      if (targetRi >= 0) {
-        const rowEl = grid.children[targetRi];
-        if (rowEl) sheetEl.scrollTop = rowEl.offsetTop - sheetEl.clientHeight / 2 + rowEl.clientHeight / 2;
-      }
-    }
-  };
-
   const applyTf = (fn) => {
     pushUndo();
     fn();
@@ -1609,6 +1596,7 @@ function buildPianoEditor(sceneIndex, scene, track) {
   ]);
   sheet.appendChild(tf);
 
+  const scrollContainer = el("div", { class: "editor-scroll" });
   const grid = el("div", { class: "proll" });
   const rowCells = []; // [rowIndex][step]
   const cursorCols = Array.from({ length: 16 }, () => []);
@@ -1644,7 +1632,8 @@ function buildPianoEditor(sceneIndex, scene, track) {
       ])
     );
   });
-  sheet.appendChild(grid);
+  scrollContainer.appendChild(grid);
+  sheet.appendChild(scrollContainer);
 
   // Velocity lane.
   const vlane = el("div", { class: "vlane" });
@@ -1674,6 +1663,20 @@ function buildPianoEditor(sceneIndex, scene, track) {
       vbars[s].parentElement.style.opacity = notes.length ? 1 : 0.3;
     }
   }
+
+  const scrollToNotes = () => {
+    const activeRow = scrollContainer.querySelector(".pcell.on")?.closest(".prow");
+    if (activeRow) {
+      scrollContainer.scrollTop = activeRow.offsetTop - scrollContainer.clientHeight / 2 + activeRow.clientHeight / 2;
+    } else {
+      const defaultMidi = track === "bass" ? 36 : 60; // C2 or C4
+      const targetRi = rows.findIndex(m => m <= defaultMidi);
+      if (targetRi >= 0) {
+        const rowEl = grid.children[targetRi];
+        if (rowEl) scrollContainer.scrollTop = rowEl.offsetTop - scrollContainer.clientHeight / 2 + rowEl.clientHeight / 2;
+      }
+    }
+  };
 
   async function onNoteDown(e, s, midi, cell) {
     e.preventDefault();
@@ -1745,6 +1748,7 @@ function buildPianoEditor(sceneIndex, scene, track) {
 function buildHarmonyEditor(sceneIndex, scene) {
   if (!scene.harmony || scene.harmony.length === 0) scene.harmony = [0, 0, 0, 0];
   let selected = 0;
+  const scrollContainer = el("div", { class: "editor-scroll" });
   const row = el("div", { class: "chordrow" });
   const slots = scene.harmony.map((ci, idx) => {
     const slot = el("div", {
@@ -1759,7 +1763,7 @@ function buildHarmonyEditor(sceneIndex, scene) {
     return slot;
   });
   slots.forEach((s) => row.appendChild(s));
-  sheet.appendChild(row);
+  scrollContainer.appendChild(row);
 
   const picker = el("div", { class: "picker" });
   CHORDS.forEach((ch, ci) => {
@@ -1779,7 +1783,8 @@ function buildHarmonyEditor(sceneIndex, scene) {
       })
     );
   });
-  sheet.appendChild(picker);
+  scrollContainer.appendChild(picker);
+  sheet.appendChild(scrollContainer);
 }
 
 function refreshClip(sceneIndex, track) {

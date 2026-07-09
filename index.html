@@ -492,7 +492,9 @@
         transition: transform 0.26s cubic-bezier(0.2, 0.7, 0.2, 1);
         padding: 10px 12px calc(16px + env(safe-area-inset-bottom, 0px));
         max-height: 78%;
-        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
         pointer-events: none;
       }
       #sheet.open {
@@ -519,9 +521,9 @@
         color: var(--dim);
         font-size: 12px;
         font-weight: 600;
+        margin-right: auto;
       }
       .sheet-bar .close {
-        margin-left: auto;
         background: #2b2b2e;
         border: 1px solid #000;
         border-radius: 5px;
@@ -897,6 +899,23 @@
         font-weight: 600;
       }
 
+      /* Editor scroll container */
+      .editor-scroll {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        touch-action: pan-y;
+        margin-bottom: 8px;
+        padding-right: 4px;
+      }
+      .editor-scroll::-webkit-scrollbar {
+        width: 4px;
+      }
+      .editor-scroll::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.15);
+        border-radius: 4px;
+      }
+
       /* Piano roll */
       .prow {
         display: grid;
@@ -980,6 +999,9 @@
         display: flex;
         gap: 2px;
         padding-bottom: 4px;
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
       }
       .mx-strip {
         flex: 1 1 0;
