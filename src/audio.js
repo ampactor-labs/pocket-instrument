@@ -15,15 +15,15 @@ const SEND_OFF_DB = -60;
 const FIRST_PLAY_WARMUP_MS = 400;
 const PLAY_START_LEAD_TIME = "+0.18";
 const SOURCE_LEVEL_DB = {
-  harmonyPad: -16,
-  harmonyHalo: -30,
-  harmonyRoot: -36,
+  harmonyPad: -10,
+  harmonyHalo: -24,
+  harmonyRoot: -30,
   bass: -2,
-  melody: 4,
-  kick: -2,
-  snare: 5,
-  hat: -6,
-  clap: -2,
+  melody: 6,
+  kick: 5,
+  snare: 14,
+  hat: 5,
+  clap: 7,
 };
 const KICK_DUCK_GAIN = Tone.dbToGain(-8);
 const DRUM_PARALLEL_GAIN = Tone.dbToGain(-10);
@@ -112,7 +112,9 @@ export function createAudio(song) {
   const echo = new Tone.FeedbackDelay({ delayTime: "8n", feedback: 0.26, wet: 1 }).connect(master);
   const echoReturn = new Tone.Gain(Tone.dbToGain(-4)).connect(echo);
   const musicDuck = new Tone.Gain(1).connect(master);
-  const drumDry = new Tone.Gain(Tone.dbToGain(-1)).connect(master);
+  
+  const drumBus = new Tone.Gain(1).connect(master);
+  const drumDry = new Tone.Gain(Tone.dbToGain(-1)).connect(drumBus);
   const drumParallel = new Tone.Compressor({
     threshold: -24,
     ratio: 4.5,
@@ -120,7 +122,7 @@ export function createAudio(song) {
     release: 0.13,
     knee: 12,
   });
-  const drumParallelReturn = new Tone.Gain(DRUM_PARALLEL_GAIN).connect(master);
+  const drumParallelReturn = new Tone.Gain(DRUM_PARALLEL_GAIN).connect(drumBus);
   drumParallel.connect(drumParallelReturn);
 
   // Mixer strips — direct gain wiring (no send/receive bus, which can silently
@@ -147,11 +149,13 @@ export function createAudio(song) {
     if (k === "drums") {
       channels[k].connect(drumDry);
       channels[k].connect(drumParallel);
+      meters[k] = new Tone.Meter();
+      drumBus.connect(meters[k]);
     } else {
       channels[k].connect(musicDuck);
+      meters[k] = new Tone.Meter();
+      channels[k].connect(meters[k]);
     }
-    meters[k] = new Tone.Meter();
-    channels[k].connect(meters[k]);
     // Direct gain nodes wired to the effects instead of the send/receive bus
     verbSends[k] = new Tone.Gain(0).connect(reverb);
     channels[k].connect(verbSends[k]);
