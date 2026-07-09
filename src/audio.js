@@ -48,7 +48,7 @@ export const HARMONY_PRESET_NAMES = Object.keys(HARMONY_PRESETS);
 
 const BASS_PRESETS = {
   deep:   { wave: "sine",     cutoff: 500,  attack: 0.01,  decay: 0.3,  sustain: 0.7,  release: 0.3, gain: 0, drive: 0, detune: 0 },
-  bright: { wave: "sawtooth", cutoff: 2500, attack: 0.02,  decay: 0.15, sustain: 0.4,  release: 0.2, gain: 8, drive: 0.2, detune: -1200 },
+  bright: { wave: "sawtooth", cutoff: 2500, attack: 0.02,  decay: 0.15, sustain: 0.4,  release: 0.2, gain: -3, drive: 0.1, detune: 0 },
   pluck:  { wave: "fmsquare", cutoff: 1800, attack: 0.001, decay: 0.2,  sustain: 0.1,  release: 0.1, gain: -2, drive: 0.5, detune: 0 },
   sub:    { wave: "triangle", cutoff: 350,  attack: 0.05,  decay: 0.4,  sustain: 1.0,  release: 0.4, gain: 4, drive: 0.35, detune: 0 },
 };
@@ -213,8 +213,7 @@ export function createAudio(song) {
   }).connect(rootHintFilter);
 
   // Bass + lead — device params live-adjustable.
-  const bassEQ = new Tone.EQ3({ low: 5, mid: -3, high: 0, lowFrequency: 70, highFrequency: 800 }).connect(channels.bass);
-  const bassHighpass = new Tone.Filter({ type: "highpass", frequency: 34, Q: 0.7 }).connect(bassEQ);
+  const bassHighpass = new Tone.Filter({ type: "highpass", frequency: 34, Q: 0.7 }).connect(channels.bass);
   const bassFilter = new Tone.Filter({ type: "lowpass", frequency: 750, Q: 0.9 }).connect(bassHighpass);
   const bassDrive = new Tone.Distortion(0).connect(bassFilter);
   const bassTrk = new Tone.PolySynth(Tone.Synth, {
@@ -293,7 +292,14 @@ export function createAudio(song) {
     const synth = track === "bass" ? bassTrk : lead;
     const stretch = track === "bass" ? 1.1 : 1;
     for (const n of noteSlot(slot)) {
-      synth.triggerAttackRelease(midiToFreq(n.midi), sixteenth() * (n.len || 1) * stretch, time, n.vel ?? 0.9);
+      let vel = n.vel ?? 0.9;
+      if (track === "bass") {
+        const p = devices.bass.preset;
+        if (p === "sub" && n.midi < 36) vel *= 2.5; // +8dB for Octave 1 sub
+        else if (p === "bright" && n.midi >= 36 && n.midi < 48) vel *= 1.25; // slight boost in Oct2
+        else if (p === "pluck" && n.midi >= 36 && n.midi < 48) vel *= 1.4; // restore felt bass in Oct2
+      }
+      synth.triggerAttackRelease(midiToFreq(n.midi), sixteenth() * (n.len || 1) * stretch, time, vel);
     }
   }
   function hitDrum(v, time, vel = 0.9) {
@@ -734,8 +740,7 @@ export function createAudio(song) {
         const offSub = new Tone.Synth({ oscillator: { type: "sine" }, envelope: { attack: 0.08, decay: 0.4, sustain: 0.85, release: 1.6 }, volume: SOURCE_LEVEL_DB.harmonyRoot }).connect(offRootHp);
 
         const bp = BASS_PRESETS[devices.bass.preset] || BASS_PRESETS.deep;
-        const offBEq = new Tone.EQ3({ low: 5, mid: -3, high: 0, lowFrequency: 70, highFrequency: 800 }).connect(offCh.bass);
-        const offBHp = new Tone.Filter({ type: "highpass", frequency: 34, Q: 0.7 }).connect(offBEq);
+        const offBHp = new Tone.Filter({ type: "highpass", frequency: 34, Q: 0.7 }).connect(offCh.bass);
         const offBF = new Tone.Filter({ type: "lowpass", frequency: bp.cutoff, Q: 0.9 }).connect(offBHp);
         const offBDrive = new Tone.Distortion(bp.drive || 0).connect(offBF);
         const offBass = new Tone.PolySynth(Tone.Synth, { maxPolyphony: 6, oscillator: { type: bp.wave, detune: bp.detune || 0 }, envelope: { attack: bp.attack, decay: bp.decay, sustain: bp.sustain, release: bp.release }, volume: SOURCE_LEVEL_DB.bass + (bp.gain || 0) }).connect(offBDrive);
@@ -805,7 +810,14 @@ export function createAudio(song) {
             if (c) {
               const synth = trk === "bass" ? offBass : offLead;
               for (const n of noteSlot(song.scenes[c.scene][trk][sib])) {
-                synth.triggerAttackRelease(midiToFreq(n.midi), offSix() * (n.len || 1) * (trk === "bass" ? 1.1 : 1), time, n.vel ?? 0.9);
+                let vel = n.vel ?? 0.9;
+                if (trk === "bass") {
+                  const p = devices.bass.preset;
+                  if (p === "sub" && n.midi < 36) vel *= 2.5;
+                  else if (p === "bright" && n.midi >= 36 && n.midi < 48) vel *= 1.25;
+                  else if (p === "pluck" && n.midi >= 36 && n.midi < 48) vel *= 1.4;
+                }
+                synth.triggerAttackRelease(midiToFreq(n.midi), offSix() * (n.len || 1) * (trk === "bass" ? 1.1 : 1), time, vel);
               }
             }
           }
