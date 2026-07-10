@@ -1,19 +1,35 @@
-// Tone.js engine. Per-track mixer channels (vol/pan/sends + meter), device
-// presets per track, note length + velocity, and a transport that loops a
-// Scene or plays the Arrangement.
+// Tone.js engine. Per-track mixer channels (vol/pan/sends + meter), a morphable
+// device per track (vector synthesis over four preset corners + a color/motion
+// slot), note length + velocity, and a transport that loops a Scene or plays
+// the Arrangement.
 //
 // One rule keeps the WAV export honest: buildGraph() is the ONLY place the
 // signal chain exists. The live context and the offline renderer both call it,
 // so "export sounds like the app" holds by construction. If you touch the
 // chain, touch it there.
+//
+// The sound space, in one breath: each melodic track hosts FOUR synth layers,
+// one per preset corner, each keeping its own oscillator and envelope. A patch
+// is a point {x, y} between the corners — bilinear weights set layer levels
+// (equal-power) and blend the shared tone controls (filter, drive, chorus).
+// On top sits one color insert (tape/crush/phase/trem/wob) with amount +
+// motion, motion rates quantized to tempo divisions. Corners are loudness-
+// matched by measurement (npm run calibrate), the space between inherits it,
+// and the per-track lane filters stay outside the explorable space — so any
+// point a finger or a dice can reach is already mixed.
 
 import * as Tone from "tone";
 import { CHORDS, DRUM_VOICES, voiceLead, clipAt, arrangeLength, clipLaunch, clipLengthBars, noteSlot } from "./model.js";
+
+// Debug handle for the headless harnesses; lets calibrate/smoke experiments
+// build minimal Tone graphs without reaching into the bundle.
+if (typeof window !== "undefined") window.__noodlesTone = Tone;
 
 const midiToFreq = (m) => Tone.Frequency(m, "midi").toFrequency();
 const sixteenth = () => Tone.Time("16n").toSeconds();
 
 export const TRACK_KEYS = ["harmony", "drums", "bass", "melody"];
+export const MELODIC_TRACKS = ["harmony", "bass", "melody"];
 
 const DEFAULT_TRACK_VOLUME_DB = -6;
 const SEND_OFF_DB = -60;
@@ -43,9 +59,9 @@ function scheduleKickDuck(param, time) {
   param.exponentialRampToValueAtTime(1, time + 0.25);
 }
 
-// --- Device presets (like drum kits, one set per track) ---
-// gain values are trims measured so every preset of a track lands at the same
-// loudness — randomizing presets must never change the mix balance.
+// --- Preset corners (like drum kits, one set per track) ---
+// gain values are trims measured so every corner of a track lands at the same
+// loudness — morphing or randomizing must never change the mix balance.
 const HARMONY_PRESETS = {
   pad:     { osc: "sawtooth", filter: 1200, attack: 0.35, decay: 1.5, sustain: 0.8, release: 1.2, chorusWet: 0.4, chorusDepth: 0.7, gain: -4.5 },
   keys:    { osc: "sine",     filter: 3000, attack: 0.01, decay: 0.4, sustain: 0.2, release: 0.4, chorusWet: 0.15, chorusDepth: 0.3, gain: -3 },
@@ -69,6 +85,15 @@ const MELODY_PRESETS = {
   pluck: { wave: "triangle", cutoff: 2800, attack: 0.005, decay: 0.1,  sustain: 0.0, release: 0.1, gain: 1.5 },
 };
 export const MELODY_PRESET_NAMES = Object.keys(MELODY_PRESETS);
+
+const PRESET_TABLES = { harmony: HARMONY_PRESETS, bass: BASS_PRESETS, melody: MELODY_PRESETS };
+// Corner order = table order, laid out TL, TR, BL, BR on the XY pad.
+export const CORNERS = {
+  harmony: HARMONY_PRESET_NAMES,
+  bass: BASS_PRESET_NAMES,
+  melody: MELODY_PRESET_NAMES,
+};
+export const COLOR_NAMES = ["none", "tape", "crush", "phase", "trem", "wob"];
 
 // Tight, dead kits — funk / UK garage register (short decays, damped).
 const KITS = {
@@ -96,10 +121,51 @@ const KITS = {
 };
 export const KIT_NAMES = Object.keys(KITS);
 
+// --- Patch specs ---
+// Melodic: { x, y, color, amount, motion }. Drums: { color, amount, motion }.
+export function defaultPatch(track) {
+  const base = { color: "none", amount: 0.5, motion: 0.5 };
+  return track === "drums" ? base : { x: 0, y: 0, ...base };
+}
+
+const clamp01 = (v) => Math.max(0, Math.min(1, Number(v) || 0));
+
+function normalizePatch(track, raw = {}) {
+  const p = { ...defaultPatch(track), ...raw };
+  p.color = COLOR_NAMES.includes(p.color) ? p.color : "none";
+  p.amount = clamp01(p.amount);
+  p.motion = clamp01(p.motion);
+  if (track !== "drums") {
+    p.x = clamp01(p.x);
+    p.y = clamp01(p.y);
+  }
+  return p;
+}
+
+// Bilinear corner weights for a point in the pad.
+function cornerWeights(patch) {
+  const { x, y } = patch;
+  return [(1 - x) * (1 - y), x * (1 - y), (1 - x) * y, x * y];
+}
+
+export function cornerXY(track, name) {
+  const i = Math.max(0, CORNERS[track].indexOf(name));
+  return { x: i % 2, y: Math.floor(i / 2) };
+}
+
+export function dominantCorner(track, patch) {
+  const w = cornerWeights(patch);
+  return CORNERS[track][w.indexOf(Math.max(...w))];
+}
+
+// Blend helpers: frequencies morph in log space, times and levels linearly.
+const blendLin = (vals, w) => vals.reduce((acc, v, i) => acc + v * w[i], 0);
+const blendLog = (vals, w) => Math.exp(vals.reduce((acc, v, i) => acc + Math.log(Math.max(v, 1e-3)) * w[i], 0));
+
 // Key-tracked velocity boosts: octave 1 loses audible energy to the 34 Hz
-// highpass and to small speakers, so every preset pushes the low register
-// back up. Factors close the measured octave-1 vs octave-2 RMS gaps
-// (npm run calibrate, bassOct table).
+// highpass and to small speakers, so quieter registers get pushed back up.
+// Factors close the measured octave-1 vs octave-2 RMS gaps (npm run
+// calibrate, bassOct table). Keyed by the patch's dominant corner.
 function bassVelocityBoost(preset, midi) {
   if (midi >= 36) return 1;
   if (preset === "sub") return 2.5;
@@ -176,101 +242,233 @@ function buildGraph({ meters = false } = {}) {
     g.masterLimiter.connect(g.masterMeter);
   }
 
-  // Harmony: lush pad + mono shimmer an octave up + a quiet low-mid root hint.
-  // Bass owns the low end, so the pad and the hint are highpassed.
+  // Color insert points: everything a track makes flows through colorIn, and
+  // applyColorTo splices the selected effect between colorIn and colorDest.
+  g.colorIn = {};
+  g.colorDest = {};
+  g.colorNodes = {};
+  g.colorTypes = {};
+  for (const k of TRACK_KEYS) {
+    g.colorIn[k] = new Tone.Gain(1);
+    g.colorDest[k] = k === "drums" ? g.channels.drums : g.inputs[k];
+    g.colorIn[k].connect(g.colorDest[k]);
+    g.colorNodes[k] = null;
+    g.colorTypes[k] = "none";
+  }
+
+  // Layer factory: one synth per preset corner, oscillator and envelope FIXED
+  // to that corner. Morphing crossfades whole voices — each corner keeps its
+  // identity, the blend does the work. Layers below ~2% weight are muted and
+  // never triggered, so parked-at-a-corner costs what a single synth did.
+  //
+  // Construct at the track source level: PolySynth bakes the constructor
+  // volume into each lazily-created VOICE (later .volume writes only reach
+  // the output node), so this is where the voice level — and the level that
+  // hits the drive stage — gets set. The output node then carries only the
+  // morph weight (applyMorphTo).
+  const makeLayers = (table, poly, dest, srcDb) =>
+    Object.values(table).map((p) => {
+      const synth = new Tone.PolySynth(Tone.Synth, {
+        maxPolyphony: poly,
+        oscillator: { type: p.osc || p.wave, detune: p.detune || 0 },
+        envelope: { attack: p.attack, decay: p.decay, sustain: p.sustain, release: p.release },
+        volume: srcDb,
+      }).connect(dest);
+      if ((p.osc || p.wave) === "fmsquare") synth.set({ oscillator: { modulationType: "sawtooth", harmonicity: 0.5, modulationIndex: 2 } });
+      return synth;
+    });
+
+  // Harmony: morphing pad + mono shimmer an octave up + a quiet low-mid root
+  // hint. Bass owns the low end, so the pad and the hint are highpassed.
   g.chorus = new Tone.Chorus({ frequency: 0.4, delayTime: 4, depth: 0.6, wet: 0.35 }).start();
   g.padHighpass = new Tone.Filter({ type: "highpass", frequency: 170, Q: 0.6 });
   g.padFilter = new Tone.Filter({ type: "lowpass", frequency: 1500, Q: 0.7 });
   // The LFO OWNS the pad cutoff (a signal connected to a param overrides it —
-  // writing frequency.value is silently ignored and rampTo throws). Presets
-  // steer the cutoff by rescaling the LFO's min/max around their filter value.
+  // writing frequency.value is silently ignored and rampTo throws). Patches
+  // steer the cutoff by rescaling the LFO's min/max around the blended value.
   g.padLfo = new Tone.LFO({ frequency: 0.05, min: 850, max: 2600 }).connect(g.padFilter.frequency);
   g.padLfo.start();
   g.padHighpass.connect(g.padFilter);
   g.padFilter.connect(g.chorus);
-  g.chorus.connect(g.inputs.harmony);
-  g.pad = new Tone.PolySynth(Tone.Synth, {
-    maxPolyphony: 4,
-    oscillator: { type: "sawtooth" },
-    envelope: { attack: 0.28, decay: 1.1, sustain: 0.72, release: 1.0 },
-    volume: SOURCE_LEVEL_DB.harmonyPad,
-  }).connect(g.padHighpass);
+  g.chorus.connect(g.colorIn.harmony);
+  g.padLayers = makeLayers(HARMONY_PRESETS, 4, g.padHighpass, SOURCE_LEVEL_DB.harmonyPad);
   g.halo = new Tone.Synth({
     oscillator: { type: "sine" },
     envelope: { attack: 0.9, decay: 1, sustain: 0.5, release: 1.6 },
     volume: SOURCE_LEVEL_DB.harmonyHalo,
-  }).connect(g.inputs.harmony);
-  g.rootHintFilter = new Tone.Filter({ type: "highpass", frequency: 120, Q: 0.7 }).connect(g.inputs.harmony);
+  }).connect(g.colorIn.harmony);
+  g.rootHintFilter = new Tone.Filter({ type: "highpass", frequency: 120, Q: 0.7 }).connect(g.colorIn.harmony);
   g.sub = new Tone.Synth({
     oscillator: { type: "sine" },
     envelope: { attack: 0.08, decay: 0.4, sustain: 0.85, release: 1.6 },
     volume: SOURCE_LEVEL_DB.harmonyRoot,
   }).connect(g.rootHintFilter);
 
-  // Bass and lead.
-  g.bassHighpass = new Tone.Filter({ type: "highpass", frequency: 34, Q: 0.7 }).connect(g.inputs.bass);
+  // Bass and lead: layers feed the shared drive/filter lane.
+  g.bassHighpass = new Tone.Filter({ type: "highpass", frequency: 34, Q: 0.7 }).connect(g.colorIn.bass);
   g.bassFilter = new Tone.Filter({ type: "lowpass", frequency: 750, Q: 0.9 }).connect(g.bassHighpass);
   g.bassDrive = new Tone.Distortion(0).connect(g.bassFilter);
-  g.bassSynth = new Tone.PolySynth(Tone.Synth, {
-    maxPolyphony: 6,
-    oscillator: { type: "sawtooth" },
-    envelope: { attack: 0.02, decay: 0.2, sustain: 0.6, release: 0.25 },
-    volume: SOURCE_LEVEL_DB.bass,
-  }).connect(g.bassDrive);
-  g.leadHighpass = new Tone.Filter({ type: "highpass", frequency: 180, Q: 0.7 }).connect(g.inputs.melody);
+  g.bassLayers = makeLayers(BASS_PRESETS, 6, g.bassDrive, SOURCE_LEVEL_DB.bass);
+  g.leadHighpass = new Tone.Filter({ type: "highpass", frequency: 180, Q: 0.7 }).connect(g.colorIn.melody);
   g.leadFilter = new Tone.Filter({ type: "lowpass", frequency: 3200, Q: 0.6 }).connect(g.leadHighpass);
-  g.lead = new Tone.PolySynth(Tone.Synth, {
-    maxPolyphony: 8,
-    oscillator: { type: "triangle" },
-    envelope: { attack: 0.01, decay: 0.16, sustain: 0.35, release: 0.3 },
-    volume: SOURCE_LEVEL_DB.melody,
-  }).connect(g.leadFilter);
+  g.leadLayers = makeLayers(MELODY_PRESETS, 8, g.leadFilter, SOURCE_LEVEL_DB.melody);
+  g.layers = { harmony: g.padLayers, bass: g.bassLayers, melody: g.leadLayers };
 
   // Kit. Hat is a filtered noise burst on purpose — MetalSynth's 6 FM
   // oscillators made the most-triggered voice the priciest drum in the kit.
-  g.kickFilter = new Tone.Filter({ type: "lowpass", frequency: 1800, Q: 0.5 }).connect(g.channels.drums);
+  g.kickFilter = new Tone.Filter({ type: "lowpass", frequency: 1800, Q: 0.5 }).connect(g.colorIn.drums);
   g.kick = new Tone.MembraneSynth({ volume: SOURCE_LEVEL_DB.kick }).connect(g.kickFilter);
-  g.snareFilter = new Tone.Filter({ type: "highpass", frequency: 950 }).connect(g.channels.drums);
+  g.snareFilter = new Tone.Filter({ type: "highpass", frequency: 950 }).connect(g.colorIn.drums);
   g.snare = new Tone.NoiseSynth({ noise: { type: "white" }, volume: SOURCE_LEVEL_DB.snare }).connect(g.snareFilter);
-  g.hatFilter = new Tone.Filter({ type: "highpass", frequency: 7500 }).connect(g.channels.drums);
+  g.hatFilter = new Tone.Filter({ type: "highpass", frequency: 7500 }).connect(g.colorIn.drums);
   g.hat = new Tone.NoiseSynth({ noise: { type: "white" }, envelope: { attack: 0.001, decay: 0.02, sustain: 0 }, volume: SOURCE_LEVEL_DB.hat }).connect(g.hatFilter);
-  g.clapFilter = new Tone.Filter({ type: "bandpass", frequency: 1400, Q: 1.2 }).connect(g.channels.drums);
+  g.clapFilter = new Tone.Filter({ type: "bandpass", frequency: 1400, Q: 1.2 }).connect(g.colorIn.drums);
   g.clap = new Tone.NoiseSynth({ noise: { type: "pink" }, volume: SOURCE_LEVEL_DB.clap }).connect(g.clapFilter);
 
   return g;
 }
 
-// --- Preset appliers, parameterized by graph so live and offline share them.
+// --- Patch appliers, parameterized by graph so live and offline share them.
 function setTrim(g, track, db, ramp) {
   if (ramp) g.trims[track].gain.rampTo(Tone.dbToGain(db), 0.05);
   else g.trims[track].gain.value = Tone.dbToGain(db);
 }
 
-function applyHarmonyPresetTo(g, name, { ramp = false } = {}) {
-  const p = HARMONY_PRESETS[name] || HARMONY_PRESETS.keys;
-  g.pad.set({ oscillator: { type: p.osc }, envelope: { attack: p.attack, decay: p.decay, sustain: p.sustain, release: p.release } });
-  g.padLfo.min = p.filter * 0.5;
-  g.padLfo.max = p.filter * 1.5;
-  g.chorus.set({ wet: p.chorusWet, depth: p.chorusDepth });
-  setTrim(g, "harmony", p.gain, ramp);
+// The output node carries ONLY the morph weight: the track source level is
+// baked into the voices at construction (PolySynth constructor volume →
+// voices; .volume writes → output node; they stack). sqrt(weight) amplitude
+// = equal power across the pad; 10*log10(w) in dB.
+const layerDb = (w) => 10 * Math.log10(Math.max(w, 1e-4));
+
+function applyMorphTo(g, track, patch, { ramp = false } = {}) {
+  const table = Object.values(PRESET_TABLES[track]);
+  const w = cornerWeights(patch);
+  g.layers[track].forEach((layer, i) => {
+    const db = w[i] > 0.02 ? layerDb(w[i]) : -96;
+    if (ramp) layer.volume.rampTo(db, 0.03);
+    else layer.volume.value = db;
+  });
+  setTrim(g, track, blendLin(table.map((p) => p.gain), w), ramp);
+  if (track === "harmony") {
+    const filter = blendLog(table.map((p) => p.filter), w);
+    g.padLfo.min = filter * 0.5;
+    g.padLfo.max = filter * 1.5;
+    g.chorus.set({ wet: blendLin(table.map((p) => p.chorusWet), w), depth: blendLin(table.map((p) => p.chorusDepth), w) });
+  } else {
+    const cutoff = blendLog(table.map((p) => p.cutoff), w);
+    const node = track === "bass" ? g.bassFilter : g.leadFilter;
+    if (ramp) node.frequency.rampTo(cutoff, 0.05);
+    else node.frequency.value = cutoff;
+    if (track === "bass") g.bassDrive.distortion = blendLin(table.map((p) => p.drive || 0), w);
+  }
 }
 
-function applyBassPresetTo(g, name, { ramp = false } = {}) {
-  const p = BASS_PRESETS[name] || BASS_PRESETS.deep;
-  g.bassSynth.set({ oscillator: { type: p.wave, detune: p.detune || 0 }, envelope: { attack: p.attack, decay: p.decay, sustain: p.sustain, release: p.release } });
-  if (p.wave === "fmsquare") g.bassSynth.set({ oscillator: { modulationType: "sawtooth", harmonicity: 0.5, modulationIndex: 2 } });
-  if (ramp) g.bassFilter.frequency.rampTo(p.cutoff, 0.05);
-  else g.bassFilter.frequency.value = p.cutoff;
-  g.bassDrive.distortion = p.drive || 0;
-  setTrim(g, "bass", p.gain, ramp);
+// Motion picks a tempo division; colors that pulse stay on the grid.
+const MOTION_DIVISIONS = ["2n", "4n", "8n", "8t", "16n"];
+const motionHz = (motion) => {
+  const div = MOTION_DIVISIONS[Math.min(MOTION_DIVISIONS.length - 1, Math.floor(motion * MOTION_DIVISIONS.length))];
+  return 1 / Tone.Time(div).toSeconds();
+};
+
+// Color registry. Everything here is plain-DSP on purpose: worklet-based
+// effects (Tone's real BitCrusher) go silent inside Tone.Offline, and the
+// export must stay identical to the live app. Each maker returns
+// { nodes: [...serial chain...], updateColor(amount, motion) }.
+const COLOR_MAKERS = {
+  tape(amount, motion) {
+    const vib = new Tone.Vibrato({ frequency: 0.4 + motion * 4.6, depth: 0.03 + amount * 0.22 });
+    return {
+      nodes: [vib],
+      updateColor: (a, m) => {
+        vib.frequency.value = 0.4 + m * 4.6;
+        vib.depth.value = 0.03 + a * 0.22;
+      },
+    };
+  },
+  crush(amount) {
+    // Waveshaper quantizer: bit depth from amount (8 -> 3 bits). No sample-
+    // rate reduction, but cheap, deterministic, and offline-safe.
+    const curve = (bits) => {
+      const steps = Math.pow(2, bits - 1);
+      return (x) => Math.round(x * steps) / steps;
+    };
+    const shaper = new Tone.WaveShaper(curve(8 - amount * 5), 1024);
+    return { nodes: [shaper], updateColor: (a) => shaper.setMap(curve(8 - a * 5), 1024) };
+  },
+  phase(amount, motion) {
+    const phaser = new Tone.Phaser({ frequency: 0.1 + motion * 1.9, octaves: 2 + amount * 3, baseFrequency: 300 });
+    phaser.wet.value = Math.min(1, 0.3 + amount * 0.7);
+    return {
+      nodes: [phaser],
+      updateColor: (a, m) => {
+        phaser.frequency.value = 0.1 + m * 1.9;
+        phaser.octaves = 2 + a * 3;
+        phaser.wet.value = Math.min(1, 0.3 + a * 0.7);
+      },
+    };
+  },
+  trem(amount, motion) {
+    // Chopping the signal costs duty-cycle energy; the makeup gain gives it
+    // back so trem reads as movement, not a volume drop (measured ~4-5 dB).
+    const tremolo = new Tone.Tremolo({ frequency: motionHz(motion), depth: 0.3 + amount * 0.7, spread: 60 }).start();
+    const makeup = new Tone.Gain(Tone.dbToGain(1 + amount * 5));
+    return {
+      nodes: [tremolo, makeup],
+      updateColor: (a, m) => {
+        tremolo.frequency.value = motionHz(m);
+        tremolo.depth.value = 0.3 + a * 0.7;
+        makeup.gain.value = Tone.dbToGain(1 + a * 5);
+      },
+    };
+  },
+  wob(amount, motion) {
+    const auto = new Tone.AutoFilter({
+      frequency: motionHz(motion),
+      baseFrequency: 120 + amount * 180,
+      octaves: 2.5 + amount * 2,
+    }).start();
+    auto.wet.value = 1;
+    return {
+      nodes: [auto],
+      updateColor: (a, m) => {
+        auto.frequency.value = motionHz(m);
+        auto.baseFrequency = 120 + a * 180;
+        auto.octaves = 2.5 + a * 2;
+      },
+    };
+  },
+};
+
+function applyColorTo(g, track, patch) {
+  const type = patch.color;
+  if (g.colorTypes[track] === type) {
+    g.colorNodes[track]?.updateColor(patch.amount, patch.motion);
+    return;
+  }
+  g.colorIn[track].disconnect();
+  if (g.colorNodes[track]) {
+    for (const n of g.colorNodes[track].nodes) n.dispose();
+    g.colorNodes[track] = null;
+  }
+  if (type === "none" || !COLOR_MAKERS[type]) {
+    g.colorIn[track].connect(g.colorDest[track]);
+    g.colorTypes[track] = "none";
+    return;
+  }
+  const made = COLOR_MAKERS[type](patch.amount, patch.motion);
+  let prev = g.colorIn[track];
+  for (const n of made.nodes) {
+    prev.connect(n);
+    prev = n;
+  }
+  prev.connect(g.colorDest[track]);
+  g.colorNodes[track] = made;
+  g.colorTypes[track] = type;
 }
 
-function applyMelodyPresetTo(g, name, { ramp = false } = {}) {
-  const p = MELODY_PRESETS[name] || MELODY_PRESETS.lead;
-  g.lead.set({ oscillator: { type: p.wave }, envelope: { attack: p.attack, decay: p.decay, sustain: p.sustain, release: p.release } });
-  if (ramp) g.leadFilter.frequency.rampTo(p.cutoff, 0.05);
-  else g.leadFilter.frequency.value = p.cutoff;
-  setTrim(g, "melody", p.gain, ramp);
+function applyPatchTo(g, track, patch, opts) {
+  if (track !== "drums") applyMorphTo(g, track, patch, opts);
+  applyColorTo(g, track, patch);
 }
 
 function applyKitTo(g, name) {
@@ -286,23 +484,32 @@ function applyKitTo(g, name) {
   g.clap.volume.value = SOURCE_LEVEL_DB.clap + k.gain;
 }
 
-// --- Note triggers, parameterized by graph + preset state. vstate carries the
-// voice-leading memory ({ prev }) so each render gets its own.
-function playChordOn(g, vstate, ci, time) {
+// --- Note triggers, parameterized by graph + patch state. vstate carries the
+// voice-leading memory ({ prev }) so each render gets its own. Only layers
+// carrying weight get triggered — silent corners cost nothing.
+function eachActiveLayer(g, track, patch, fn) {
+  const w = cornerWeights(patch);
+  g.layers[track].forEach((layer, i) => {
+    if (w[i] > 0.02) fn(layer);
+  });
+}
+
+function playChordOn(g, patches, vstate, ci, time) {
   const voiced = voiceLead(CHORDS[ci].pcs, vstate.prev);
   vstate.prev = voiced;
-  g.pad.triggerAttackRelease(voiced.map(midiToFreq), "1n", time);
+  eachActiveLayer(g, "harmony", patches.harmony, (layer) => layer.triggerAttackRelease(voiced.map(midiToFreq), "1n", time));
   g.halo.triggerAttackRelease(midiToFreq(Math.max(...voiced) + 12), "1n", time);
   g.sub.triggerAttackRelease(midiToFreq(48 + CHORDS[ci].pcs[0]), "1n", time);
 }
 
-function playNoteStackOn(g, presets, track, slot, time) {
-  const synth = track === "bass" ? g.bassSynth : g.lead;
+function playNoteStackOn(g, patches, track, slot, time) {
   const stretch = track === "bass" ? 1.1 : 1;
+  const boostPreset = track === "bass" ? dominantCorner("bass", patches.bass) : null;
   for (const n of noteSlot(slot)) {
     let vel = n.vel ?? 0.9;
-    if (track === "bass") vel *= bassVelocityBoost(presets.bass, n.midi);
-    synth.triggerAttackRelease(midiToFreq(n.midi), sixteenth() * (n.len || 1) * stretch, time, vel);
+    if (track === "bass") vel *= bassVelocityBoost(boostPreset, n.midi);
+    const dur = sixteenth() * (n.len || 1) * stretch;
+    eachActiveLayer(g, track, patches[track], (layer) => layer.triggerAttackRelease(midiToFreq(n.midi), dur, time, vel));
   }
 }
 
@@ -317,7 +524,7 @@ function hitDrumOn(g, v, time, vel = 0.9) {
 
 // One arrangement step — shared by the live transport and the offline render.
 // Returns the chord index when a new bar triggered one (for the UI), else null.
-function playArrangementStepOn(g, presets, vstate, song, bar, stepInBar, time) {
+function playArrangementStepOn(g, patches, vstate, song, bar, stepInBar, time) {
   let chord = null;
   if (stepInBar === 0) {
     const h = clipAt(song, "harmony", bar);
@@ -325,7 +532,7 @@ function playArrangementStepOn(g, presets, vstate, song, bar, stepInBar, time) {
       const sc = song.scenes[h.scene];
       if (sc?.harmony?.length) {
         chord = sc.harmony[(bar - h.start) % sc.harmony.length];
-        playChordOn(g, vstate, chord, time);
+        playChordOn(g, patches, vstate, chord, time);
       }
     }
   }
@@ -336,7 +543,7 @@ function playArrangementStepOn(g, presets, vstate, song, bar, stepInBar, time) {
   }
   for (const trk of ["bass", "melody"]) {
     const c = clipAt(song, trk, bar);
-    if (c) playNoteStackOn(g, presets, trk, song.scenes[c.scene][trk][stepInBar], time);
+    if (c) playNoteStackOn(g, patches, trk, song.scenes[c.scene][trk][stepInBar], time);
   }
   return chord;
 }
@@ -360,11 +567,10 @@ export function createAudio(song) {
   };
 
   const live = buildGraph({ meters: true });
-  const presets = { kit: "clean", harmony: "keys", bass: "deep", melody: "lead" };
-  applyKitTo(live, presets.kit);
-  applyHarmonyPresetTo(live, presets.harmony);
-  applyBassPresetTo(live, presets.bass);
-  applyMelodyPresetTo(live, presets.melody);
+  let kitName = "clean";
+  const patches = Object.fromEntries(TRACK_KEYS.map((t) => [t, defaultPatch(t)]));
+  applyKitTo(live, kitName);
+  for (const t of TRACK_KEYS) applyPatchTo(live, t, patches[t]);
 
   const channelState = Object.fromEntries(TRACK_KEYS.map((track) => [track, {
     vol: DEFAULT_TRACK_VOLUME_DB,
@@ -382,12 +588,12 @@ export function createAudio(song) {
   }
 
   const liveVoice = { prev: null };
-  const playChord = (ci, time) => playChordOn(live, liveVoice, ci, time);
-  const playNoteStack = (track, slot, time) => playNoteStackOn(live, presets, track, slot, time);
+  const playChord = (ci, time) => playChordOn(live, patches, liveVoice, ci, time);
+  const playNoteStack = (track, slot, time) => playNoteStackOn(live, patches, track, slot, time);
   const hitDrum = (v, time, vel) => hitDrumOn(live, v, time, vel);
   function preview(ci) {
     const voiced = voiceLead(CHORDS[ci].pcs, liveVoice.prev);
-    live.pad.triggerAttackRelease(voiced.map(midiToFreq), "2n", Tone.now());
+    eachActiveLayer(live, "harmony", patches.harmony, (layer) => layer.triggerAttackRelease(voiced.map(midiToFreq), "2n", Tone.now()));
     live.sub.triggerAttackRelease(midiToFreq(48 + CHORDS[ci].pcs[0]), "2n", Tone.now());
   }
 
@@ -408,7 +614,7 @@ export function createAudio(song) {
     const len = arrangeLength(song);
     const bar = Math.floor(arrStep / 16);
     const stepInBar = arrStep % 16;
-    const chord = playArrangementStepOn(live, presets, liveVoice, song, bar, stepInBar, time);
+    const chord = playArrangementStepOn(live, patches, liveVoice, song, bar, stepInBar, time);
     if (chord !== null) scheduleDraw(() => visualCb({ type: "arrchord", bar, chord }), time);
     scheduleDraw(() => visualCb({ type: "arr", bar, stepInBar, len }), time);
     arrStep += 1;
@@ -597,11 +803,13 @@ export function createAudio(song) {
       transport.pause();
       playing = false;
       // Immediately silence all voices so pause feels instant
-      try { live.pad.releaseAll(Tone.now()); } catch {}
+      for (const t of MELODIC_TRACKS) {
+        for (const layer of live.layers[t]) {
+          try { layer.releaseAll(Tone.now()); } catch {}
+        }
+      }
       try { live.halo.triggerRelease(Tone.now()); } catch {}
       try { live.sub.triggerRelease(Tone.now()); } catch {}
-      try { live.bassSynth.releaseAll(Tone.now()); } catch {}
-      try { live.lead.releaseAll(Tone.now()); } catch {}
       liveVoice.prev = null;
       for (const track of TRACK_KEYS) queuedTracks[track] = -1; // clear queues on stop
       draw.schedule(() => visualCb({ type: "queue", activeScenes: activeScenes(), queuedTracks: getQueuedTracks() }), Tone.now());
@@ -655,6 +863,8 @@ export function createAudio(song) {
     },
     setTempo(bpm) {
       transport.bpm.rampTo(bpm, 0.1);
+      // Tempo-synced colors (trem/wob) chase the new grid.
+      for (const t of TRACK_KEYS) live.colorNodes[t]?.updateColor?.(patches[t].amount, patches[t].motion);
     },
     setSwing(v) {
       transport.swing = v;
@@ -698,26 +908,33 @@ export function createAudio(song) {
       const v = m.getValue();
       return typeof v === "number" ? v : Math.max(...v);
     },
-    // --- devices ---
-    kit: () => presets.kit,
+    // --- devices: patches ---
+    patch(track) {
+      return { ...patches[track] };
+    },
+    setPatch(track, partial) {
+      patches[track] = normalizePatch(track, { ...patches[track], ...partial });
+      applyPatchTo(live, track, patches[track], { ramp: true });
+      return { ...patches[track] };
+    },
+    // Corner-name compatibility: the dropdowns, project files from v1, and the
+    // register rules all speak preset names. A name is just a corner of the pad.
+    kit: () => kitName,
     setKit(name) {
-      presets.kit = name;
-      applyKitTo(live, name);
+      if (KITS[name]) kitName = name;
+      applyKitTo(live, kitName);
     },
-    harmonyPreset: () => presets.harmony,
+    harmonyPreset: () => dominantCorner("harmony", patches.harmony),
     setHarmonyPreset(name) {
-      presets.harmony = name;
-      applyHarmonyPresetTo(live, name);
+      this.setPatch("harmony", cornerXY("harmony", name));
     },
-    bassPreset: () => presets.bass,
+    bassPreset: () => dominantCorner("bass", patches.bass),
     setBassPreset(name) {
-      presets.bass = name;
-      applyBassPresetTo(live, name, { ramp: true });
+      this.setPatch("bass", cornerXY("bass", name));
     },
-    melodyPreset: () => presets.melody,
+    melodyPreset: () => dominantCorner("melody", patches.melody),
     setMelodyPreset(name) {
-      presets.melody = name;
-      applyMelodyPresetTo(live, name, { ramp: true });
+      this.setPatch("melody", cornerXY("melody", name));
     },
     onVisual(cb) {
       visualCb = cb;
@@ -727,15 +944,14 @@ export function createAudio(song) {
       const totalBars = arrangeLength(song);
       const barSec = 240 / song.tempo;
       const dur = totalBars * barSec + 2;
+      const patchesCopy = structuredClone(patches);
       const buffer = await Tone.Offline(({ transport: offTr }) => {
         offTr.bpm.value = song.tempo;
         offTr.swing = song.swing ?? 0;
         offTr.swingSubdivision = "16n";
         const g = buildGraph({ meters: false });
-        applyKitTo(g, presets.kit);
-        applyHarmonyPresetTo(g, presets.harmony);
-        applyBassPresetTo(g, presets.bass);
-        applyMelodyPresetTo(g, presets.melody);
+        applyKitTo(g, kitName);
+        for (const t of TRACK_KEYS) applyPatchTo(g, t, patchesCopy[t]);
         const anySolo = TRACK_KEYS.some((track) => channelState[track].solo);
         for (const k of TRACK_KEYS) {
           const st = channelState[k];
@@ -749,7 +965,7 @@ export function createAudio(song) {
         new Tone.Loop((time) => {
           const bar = Math.floor(step / 16);
           if (bar >= totalBars) return;
-          playArrangementStepOn(g, presets, vstate, song, bar, step % 16, time);
+          playArrangementStepOn(g, patchesCopy, vstate, song, bar, step % 16, time);
           step += 1;
         }, "16n").start(0);
         offTr.start(0);
