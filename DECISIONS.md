@@ -26,6 +26,16 @@ A Tonnetz orders adjacency by interval geometry, which is exactly what makes it 
 
 It is the one feature that fights the north star: a word-with-definition card is content arriving from outside the instrument, which is a push, and Principle 3 is "learning is pull, never push." The handoff already flags it as highest cheese-risk. It is also nowhere near the cold-open milestone. Cut from v0; revisit only if the instrument itself proves it needs a muse.
 
+## Ratified 2026-07-10
+
+### D5 — Automation is clip envelopes: 16-step motion lanes, gesture-recorded
+
+The builder asked for automation (and Ableton warp) without overwhelming the casual user. The call: automation lives per scene per track as `scene.motion[track]` — a param name mapped to 16 values, the same step resolution as every other lane in the app. Capture is a performance, not an editor: arm ● in the Sound sheet, play, ride the XY pad or the amount/motion knobs, and only the params you touched get lanes. Playback schedules the morph ramps at transport time (sample-accurate against the heard beat); a scene with no lanes restores the base patch exactly once. Living in the scene means undo, project files, cloning, and offline render all carry automation for free. Deferred deliberately: send automation (needs a base-restore story against mixer state), lane *editing* UI (a param picker on the existing velocity-lane surface is the natural next step), and breakpoint curves (step lanes match the app's grid idiom; curves are DAW-density).
+
+### D6 — Warp is reframed as the chop deck; true time-stretch waits
+
+Ableton-style warp is phase-vocoder stretching — heavy for the target phone, and worklets render silent inside Tone.Offline, which would break export-matches-app (the BitCrusher lesson). What made warp-era sample work joyful was mostly chopping against the grid, reordering, and repitching — and that maps to a noodles-native **chop deck**: load a WAV, auto-slice at transients or grid divisions, slices land on pads and sequence on the same 16 steps, per-slice repitch via playbackRate (native, cheap, offline-safe). If loops-that-follow-tempo is ever needed, stretch once at import into a pre-rendered buffer rather than in realtime. Agreed order: automation first, chop deck second.
+
 ## Provisional (my recommendation, argue against it)
 
 ### P1 — Use case 1 leads v0; the cold-open harmony playground is the whole first milestone

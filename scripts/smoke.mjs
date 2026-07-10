@@ -313,6 +313,25 @@ try {
     `sound dice rolled out of range: ${JSON.stringify(rolled)}`
   );
   await page.evaluate(() => window.__noodles.audio.setPatch("bass", { x: 0, y: 0, color: "none" }));
+  // Motion capture: arm the bass, play, ride the pad via setPatch, and some
+  // playing scene must grow an x lane with real variety in it.
+  await page.evaluate(() => window.__noodles.audio.armMotion("bass", true));
+  await tap(page, ".tbtn.play");
+  await page.evaluate(async () => {
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    for (let i = 0; i < 10; i++) {
+      window.__noodles.audio.setPatch("bass", { x: i / 10, y: 1 - i / 10 });
+      await wait(150);
+    }
+  });
+  await page.waitForFunction(() => {
+    return window.__noodles.song.scenes.some((sc) => {
+      const lane = sc.motion?.bass?.x;
+      return Array.isArray(lane) && new Set(lane.map((v) => v.toFixed(2))).size > 2;
+    });
+  }, { timeout: 15000 });
+  await tap(page, ".tbtn.play");
+  await page.evaluate(() => window.__noodles.audio.disarmMotion());
   // Drums: kit pad, sample/synth banks, and the one-shot picker. The sound
   // sheet replaced the mixer, so reopen it to reach the drums strip.
   await closeSheet(page);

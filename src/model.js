@@ -157,18 +157,36 @@ export function normalizeDrumLane(lane = null) {
   });
 }
 
+// Motion lanes: per-track clip envelopes — a param name mapped to 16 values
+// in 0..1, captured by performing on the sound pad while recording.
+export function normalizeMotion(motion = null) {
+  const out = {};
+  for (const track of ARRANGE_TRACKS) {
+    const lanes = motion?.[track];
+    if (!lanes || typeof lanes !== "object") continue;
+    const t = {};
+    for (const [param, lane] of Object.entries(lanes)) {
+      if (!Array.isArray(lane)) continue;
+      t[param] = Array.from({ length: 16 }, (_, i) => Math.max(0, Math.min(1, Number(lane[i]) || 0)));
+    }
+    if (Object.keys(t).length) out[track] = t;
+  }
+  return out;
+}
+
 export function normalizeScene(scene) {
   scene.melody = normalizeNoteLane(scene.melody);
   scene.bass = normalizeNoteLane(scene.bass);
   const drums = scene.drums || {};
   scene.drums = Object.fromEntries(DRUM_VOICES.map((v) => [v, normalizeDrumLane(drums[v])]));
+  scene.motion = normalizeMotion(scene.motion);
   return scene;
 }
 
 let sceneSeq = 0;
 const SCENE_TAGS = ["A", "B", "C", "D", "E", "F", "G", "H"];
 
-export function makeScene(harmony, drums, melody = null, bass = null) {
+export function makeScene(harmony, drums, melody = null, bass = null, motion = null) {
   const tag = SCENE_TAGS[sceneSeq % SCENE_TAGS.length];
   sceneSeq += 1;
   const scene = {
@@ -179,6 +197,7 @@ export function makeScene(harmony, drums, melody = null, bass = null) {
     // Each note is { midi, len, vel }; old single-note slots normalize to stacks.
     melody: normalizeNoteLane(melody),
     bass: normalizeNoteLane(bass),
+    motion: normalizeMotion(motion),
   };
   scene.launch = cloneLaunch();
   return scene;
@@ -259,7 +278,7 @@ export function makeMagicScene() {
 }
 
 export function cloneScene(scene) {
-  const cloned = makeScene(scene.harmony, scene.drums, scene.melody, scene.bass);
+  const cloned = makeScene(scene.harmony, scene.drums, scene.melody, scene.bass, scene.motion);
   cloned.launch = cloneLaunch(scene.launch);
   return cloned;
 }

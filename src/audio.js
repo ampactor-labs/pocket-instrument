@@ -433,8 +433,8 @@ function buildGraph({ meters = false } = {}) {
 }
 
 // --- Patch appliers, parameterized by graph so live and offline share them.
-function setTrim(g, track, db, ramp) {
-  if (ramp) g.trims[track].gain.rampTo(Tone.dbToGain(db), 0.05);
+function setTrim(g, track, db, ramp, at) {
+  if (ramp) g.trims[track].gain.rampTo(Tone.dbToGain(db), 0.05, at);
   else g.trims[track].gain.value = Tone.dbToGain(db);
 }
 
@@ -444,17 +444,17 @@ function setTrim(g, track, db, ramp) {
 // = equal power across the pad; 10*log10(w) in dB.
 const layerDb = (w) => 10 * Math.log10(Math.max(w, 1e-4));
 
-function applyMorphTo(g, track, patch, { ramp = false } = {}) {
+function applyMorphTo(g, track, patch, { ramp = false, at } = {}) {
   const table = Object.values(PRESET_TABLES[track]);
   const w = cornerWeights(patch);
   const active = activeLayerWeights(patch);
   g.layers[track].forEach((layer, i) => {
     const entry = active.find((a) => a.i === i);
     const db = entry ? layerDb(entry.w) : -96;
-    if (ramp) layer.volume.rampTo(db, 0.03);
+    if (ramp) layer.volume.rampTo(db, 0.03, at);
     else layer.volume.value = db;
   });
-  setTrim(g, track, blendLin(table.map((p) => p.gain), w), ramp);
+  setTrim(g, track, blendLin(table.map((p) => p.gain), w), ramp, at);
   if (track === "harmony") {
     const filter = blendLog(table.map((p) => p.filter), w);
     g.padLfo.min = filter * 0.5;
@@ -463,7 +463,7 @@ function applyMorphTo(g, track, patch, { ramp = false } = {}) {
   } else {
     const cutoff = blendLog(table.map((p) => p.cutoff), w);
     const node = track === "bass" ? g.bassFilter : g.leadFilter;
-    if (ramp) node.frequency.rampTo(cutoff, 0.05);
+    if (ramp) node.frequency.rampTo(cutoff, 0.05, at);
     else node.frequency.value = cutoff;
     if (track === "bass") g.bassDrive.distortion = blendLin(table.map((p) => p.drive || 0), w);
   }
@@ -676,9 +676,42 @@ function hitDrumOn(g, patches, v, time, vel = 0.9) {
   else g.hat.triggerAttackRelease("32n", time, vel);
 }
 
+// Clip envelopes: a scene's motion lanes override the base patch for this
+// step. The morph path schedules its ramps at the tick's transport time so
+// automation lands on the heard beat; color params apply at callback time
+// (their plain-property knobs can't be scheduled). mstate.motionOn remembers
+// which tracks are riding lanes so the base patch gets restored exactly once
+// when the lanes end.
+function applyMotionOn(g, patchesRef, mstate, track, scene, step, time) {
+  const lanes = scene?.motion?.[track];
+  mstate.motionOn ||= {};
+  if (!lanes || !Object.keys(lanes).length) {
+    if (mstate.motionOn[track]) {
+      applyPatchTo(g, track, patchesRef[track], { ramp: true, at: time });
+      mstate.motionOn[track] = false;
+    }
+    return;
+  }
+  const eff = { ...patchesRef[track] };
+  for (const [param, lane] of Object.entries(lanes)) {
+    if (Array.isArray(lane)) eff[param] = lane[step] ?? eff[param];
+  }
+  applyPatchTo(g, track, eff, { ramp: true, at: time });
+  mstate.motionOn[track] = true;
+}
+
 // One arrangement step — shared by the live transport and the offline render.
 // Returns the chord index when a new bar triggered one (for the UI), else null.
 function playArrangementStepOn(g, patches, vstate, song, bar, stepInBar, time) {
+  for (const trk of TRACK_KEYS) {
+    const c = clipAt(song, trk, bar);
+    if (!c) continue;
+    const sc = song.scenes[c.scene];
+    // A live recorder (armed track) wins over lane playback; offline renders
+    // have no recorder and always play the lanes.
+    if (vstate.recordMotion?.(trk, sc, stepInBar)) continue;
+    applyMotionOn(g, patches, vstate, trk, sc, stepInBar, time);
+  }
   let chord = null;
   if (stepInBar === 0) {
     const h = clipAt(song, "harmony", bar);
@@ -776,6 +809,28 @@ export function createAudio(song) {
   }
 
   const liveVoice = { prev: null };
+  liveVoice.recordMotion = (track, scene, step) => {
+    if (!motionArmed[track]) return false;
+    recordMotionTick(track, scene, step);
+    return true;
+  };
+  // Motion capture: arm a track and every 16th samples the live patch values
+  // (your finger on the pad) into the playing scene's lanes — but only the
+  // params you actually touched while armed, so untouched knobs stay free.
+  const MOTION_PARAMS = ["x", "y", "amount", "motion"];
+  const motionArmed = Object.fromEntries(TRACK_KEYS.map((t) => [t, false]));
+  const motionDirty = Object.fromEntries(TRACK_KEYS.map((t) => [t, new Set()]));
+  function recordMotionTick(track, scene, step) {
+    liveVoice.motionOn ||= {};
+    liveVoice.motionOn[track] = true;
+    const dirty = motionDirty[track];
+    if (!dirty.size) return;
+    const lanes = ((scene.motion ||= {})[track] ||= {});
+    for (const param of dirty) {
+      if (!lanes[param]) lanes[param] = new Array(16).fill(patches[track][param]);
+      lanes[param][step] = patches[track][param];
+    }
+  }
   const playChord = (ci, time) => playChordOn(live, patches, liveVoice, ci, time);
   const playNoteStack = (track, slot, time) => playNoteStackOn(live, patches, track, slot, time);
   const hitDrum = (v, time, vel) => hitDrumOn(live, patches, v, time, vel);
@@ -915,6 +970,14 @@ export function createAudio(song) {
     }
 
     const activeBefore = activeScenes();
+    for (const track of TRACK_KEYS) {
+      const st = trackState[track];
+      if (!st.active || !song.scenes[st.scene]) continue;
+      const sc = song.scenes[st.scene];
+      if (!liveVoice.recordMotion(track, sc, st.step % 16)) {
+        applyMotionOn(live, patches, liveVoice, track, sc, st.step % 16, time);
+      }
+    }
     const harmonyState = trackState.harmony;
     const harmonyScene = harmonyState.active ? song.scenes[harmonyState.scene] : null;
     let visualStep = 0;
@@ -1112,6 +1175,9 @@ export function createAudio(song) {
     setPatch(track, partial) {
       const prevColor = patches[track].color;
       patches[track] = normalizePatch(track, { ...patches[track], ...partial });
+      if (motionArmed[track] && partial) {
+        for (const p of MOTION_PARAMS) if (p in partial) motionDirty[track].add(p);
+      }
       if (patches[track].color !== prevColor) {
         // Splicing a different insert mid-stream clicks; duck the junction for
         // the swap. ~45 ms of dip on a deliberate sound-design tap is free.
@@ -1142,6 +1208,15 @@ export function createAudio(song) {
     },
     samplesReady: () => samplesReady,
     visualLatency,
+    // --- motion capture ---
+    armMotion(track, on) {
+      motionArmed[track] = !!on;
+      if (on) motionDirty[track] = new Set();
+    },
+    motionArmed: (track) => motionArmed[track],
+    disarmMotion() {
+      for (const t of TRACK_KEYS) motionArmed[t] = false;
+    },
     userSampleName: (voice) => userSamples[voice]?.name || null,
     async loadUserSample(voice, arrayBuffer, name) {
       const audioBuf = await Tone.getContext().rawContext.decodeAudioData(arrayBuffer);

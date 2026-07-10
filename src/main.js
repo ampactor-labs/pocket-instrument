@@ -971,6 +971,7 @@ function closeEditor() {
   editor = null;
   cancelAnimationFrame(mixerRAF);
   mixerRAF = 0;
+  audio.disarmMotion();
   scrim.classList.remove("open");
   sheet.classList.remove("open");
 }
@@ -1514,6 +1515,19 @@ function openMixer(focusTrack = null) {
 function openSoundSheet(track) {
   const meta = TRACKS.find((t) => t.key === track);
   resetSheet(meta.color);
+  // Motion capture: arm ●, play, and perform on the pad — the ride is written
+  // into the playing scene's lanes, quantized to 16ths, and loops from then on.
+  const recBtn = el("div", {
+    class: "close rec-motion" + (audio.motionArmed(track) ? " on" : ""),
+    style: "margin-right:6px",
+    text: "●",
+    title: "Record motion: arm, play, ride the pad",
+    "data-action": `motion-rec-${track}`,
+    onclick: () => {
+      audio.armMotion(track, !audio.motionArmed(track));
+      openSoundSheet(track);
+    },
+  });
   const soundDice = el("div", {
     class: "close",
     style: "margin-right:6px",
@@ -1524,7 +1538,7 @@ function openSoundSheet(track) {
       openSoundSheet(track);
     },
   });
-  sheet.appendChild(sheetBar("Sound", meta.name, { buttons: [soundDice] }));
+  sheet.appendChild(sheetBar("Sound", meta.name, { buttons: [recBtn, soundDice] }));
   const body = el("div", { class: "editor-scroll" });
   sheet.appendChild(body);
   const patch = audio.patch(track);
@@ -1617,6 +1631,26 @@ function openSoundSheet(track) {
       ]),
     ])
   );
+
+  // A recorded ride lives in the playing scene; offer the way out.
+  const sceneIdx = playingTracks[track] >= 0 ? playingTracks[track] : 0;
+  const motionScene = song.scenes[sceneIdx];
+  if (motionScene?.motion?.[track] && Object.keys(motionScene.motion[track]).length) {
+    body.appendChild(
+      el("div", { class: "tfrow" }, [
+        el("div", {
+          class: "tfbtn",
+          text: `Clear motion (scene ${motionScene.tag})`,
+          "data-action": `motion-clear-${track}`,
+          onclick: () => {
+            pushUndo();
+            delete motionScene.motion[track];
+            openSoundSheet(track);
+          },
+        }),
+      ])
+    );
+  }
   openSheet();
 }
 
