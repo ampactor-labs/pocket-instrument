@@ -70,7 +70,8 @@
         z-index: 30; /* stays above the editor scrim/sheet — always usable */
       }
       .tbtn.disabled {
-        opacity: 0.32;
+        opacity: 0.5;
+        color: var(--dim);
         pointer-events: none;
       }
       .tleft {
@@ -152,6 +153,7 @@
       }
       .swingslider {
         width: 74px;
+        height: 28px;
         accent-color: #e8b84b;
       }
       .keyctl {
@@ -165,7 +167,7 @@
         color: var(--text);
         border: 1px solid #000;
         border-radius: 5px;
-        padding: 5px 4px;
+        padding: 9px 4px;
         font-size: 12px;
         font-weight: 600;
       }
@@ -209,9 +211,9 @@
         min-width: 0;
       }
       .frow .tbtn {
-        height: 32px;
-        min-width: 42px;
-        padding: 0 9px;
+        height: 40px;
+        min-width: 46px;
+        padding: 0 10px;
       }
       .fspacer {
         flex: 1;
@@ -250,6 +252,23 @@
         gap: 5px;
         align-items: center;
         justify-content: center;
+        position: relative;
+      }
+      .more {
+        color: #46464c;
+        font-size: 11px;
+        font-weight: 900;
+        line-height: 1;
+        pointer-events: none;
+      }
+      .head .more,
+      .arr-thead .more {
+        position: absolute;
+        top: 2px;
+        right: 5px;
+      }
+      .scenecell .more {
+        margin-top: -2px;
       }
       .head.track-head.pressing,
       .arr-thead.pressing {
@@ -440,6 +459,11 @@
       .clip.pressing {
         filter: brightness(1.18);
       }
+      .clip-badge.state {
+        left: 5px;
+        right: auto;
+        color: rgba(255, 255, 255, 0.6);
+      }
       .clip-badge {
         position: absolute;
         right: 5px;
@@ -463,6 +487,14 @@
         background: #161617;
         font-size: 18px;
         font-weight: 400;
+      }
+      .clip.ghost {
+        color: #3f3f44;
+        border: 1px dashed #26262a;
+        background: transparent;
+        font-size: 13px;
+        font-weight: 600;
+        min-height: 48px;
       }
       .clip .mini {
         display: flex;
@@ -547,6 +579,17 @@
       .rec-motion {
         color: #d24b4b;
       }
+      .scroll-hint {
+        position: absolute;
+        left: 50%;
+        bottom: 6px;
+        transform: translateX(-50%);
+        color: var(--dim);
+        font-size: 15px;
+        font-weight: 900;
+        pointer-events: none;
+        animation: queued-pulse 1.4s ease-in-out infinite;
+      }
       .mic-big {
         min-height: 96px;
         border: 1px solid #000;
@@ -627,6 +670,11 @@
       .tempo-sheet {
         display: grid;
         gap: 10px;
+      }
+      .tap-tempo {
+        text-align: center;
+        padding: 14px 12px;
+        font-size: 14px;
       }
       .tempo-input {
         width: 100%;
@@ -803,6 +851,7 @@
       .arr-thead {
         height: 64px;
         border-bottom: 1px solid #000;
+        position: relative;
         padding: 7px 8px;
         display: flex;
         flex-direction: column;
@@ -960,7 +1009,7 @@
       }
       .arr-tools {
         position: absolute;
-        top: 3px;
+        top: 50px; /* below the ruler + loop lane, never covering them */
         z-index: 6;
         display: flex;
         gap: 6px;
@@ -1179,7 +1228,7 @@
         position: absolute;
         top: 2px;
         right: 3px;
-        font-size: 8px;
+        font-size: 10px;
         font-weight: 900;
         line-height: 1;
         color: rgba(255, 255, 255, 0.75);

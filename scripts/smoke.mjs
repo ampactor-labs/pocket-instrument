@@ -280,13 +280,13 @@ try {
   const mixerText = await page.$eval("#sheet", (el) => el.textContent);
   assertState(mixerText.includes("echo"), "mixer missing echo send");
   assertState(mixerText.includes("Master") && mixerText.includes("-6 dB"), "mixer missing master/default level");
-  // Presets randomize on load; assert the mixer UI agrees with the engine
-  // instead of pinning a name.
+  // The strip's device label names the engine's dominant corner (the preset
+  // dropdowns are gone; the sound sheet is the one path).
   const kitMatch = await page.evaluate(() => {
-    const sel = document.querySelector('.mx-strip[data-track="drums"] .mx-preset');
-    return { ui: sel?.value, engine: window.__noodles.audio.kit() };
+    const label = document.querySelector('.mx-strip[data-track="drums"] .mx-devlabel')?.textContent || "";
+    return { label, engine: window.__noodles.audio.kit() };
   });
-  assertState(kitMatch.ui === kitMatch.engine, `mixer kit select (${kitMatch.ui}) disagrees with engine (${kitMatch.engine})`);
+  assertState(kitMatch.label.includes(kitMatch.engine), `mixer device label (${kitMatch.label}) disagrees with engine (${kitMatch.engine})`);
   await tap(page, ".tbtn.play");
   const mixerStillOpen = await page.$eval("#sheet", (el) => el.classList.contains("open"));
   assertState(mixerStillOpen, "play/pause dismissed an open sheet");
@@ -359,7 +359,9 @@ try {
   await page.waitForFunction(() => document.querySelector(".sheet-bar .title")?.textContent === "Record");
   await clickAction(page, "mic-go");
   await page.waitForFunction(() => document.querySelector(".mic-big")?.classList.contains("live"), { timeout: 10000 });
-  await wait(500);
+  // Chrome's fake mic beeps periodically; record across a full cycle so the
+  // take always contains signal.
+  await wait(1200);
   await clickAction(page, "mic-go");
   await page.waitForFunction(
     () => window.__noodles.audio.userSampleName("kick") === "mic kick" && window.__noodles.audio.patch("drums").pins.kick === "user",
@@ -379,7 +381,7 @@ try {
   const exportText = await page.$eval("#sheet", (el) => el.textContent);
   assertState(exportText.includes("Download Project") && exportText.includes("Master WAV"), "export sheet missing grouped project/audio actions");
   await clickAction(page, "save-local-project");
-  await page.waitForFunction(() => document.querySelector(".exp-status")?.textContent.includes("Local snapshot saved"));
+  await page.waitForFunction(() => document.querySelector(".exp-status")?.textContent.includes("Kept on this device"));
   await page.evaluate(() => document.querySelector('[data-action="export-master-wav"]').click());
   try {
     await page.waitForFunction(() => document.querySelector(".exp-status")?.textContent.includes("Master exported"), { timeout: exportTimeout });

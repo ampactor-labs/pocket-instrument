@@ -149,6 +149,8 @@ function capturePointer(node, pointerId) {
   }
 }
 
+const buzz = (ms = 8) => navigator.vibrate?.(ms);
+
 let audioReady = false;
 async function ensureStarted() {
   if (audioReady) return;
@@ -253,6 +255,7 @@ function renderTransport() {
     id: "rec-btn",
     onclick: () => {
       sessionRecord = !sessionRecord;
+      if (sessionRecord) pushUndo();
       renderTransport();
     },
   });
@@ -295,7 +298,7 @@ function renderFooter() {
     grooveVal.textContent = Math.round(song.swing * 100) + "%";
   });
   const groove = el("div", { class: "swingctl" }, [
-    el("span", { class: "swlabel", text: "GROOV" }),
+    el("span", { class: "swlabel", text: "GROOVE" }),
     grooveSlider,
     grooveVal,
   ]);
@@ -339,7 +342,8 @@ function openAboutSheet() {
       p("🎲 rolls a whole new song: a new key, tempo, sounds, and groove."),
       p("You can't break it. Everything stays in key and every roll comes out mixed. Undo is always right there."),
       el("div", { class: "about-label", text: "when you want more" }),
-      p("Mix opens the mixer; ✦ sound morphs a track between its four sounds and adds color. Long-press a clip for launch tricks. View is the song timeline, and if you arm ● your jam records into it. File saves projects and exports WAV."),
+      p("Mix opens the mixer; ✦ sound morphs a track between its four sounds and adds color. Arm ● ride in a sound sheet and your knob moves loop with the clip. In the drum picker, 🎙 records your own mouth as a drum. Long-press clips, scenes, and track names for more."),
+      p("View is the song timeline, and if you arm ● your jam records into it. File saves projects and exports WAV."),
       p("Made for couches and phone speakers. Tell your friends."),
     ])
   );
@@ -544,8 +548,26 @@ function openTempoEditor() {
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") setTypedTempo();
   });
+  // Tap tempo: average the last few tap intervals into the input.
+  const taps = [];
+  const tapBtn = el("div", {
+    class: "tfbtn tap-tempo",
+    text: "tap the beat",
+    onclick: () => {
+      const now = performance.now();
+      while (taps.length && now - taps[taps.length - 1] > 2500) taps.length = 0;
+      taps.push(now);
+      if (taps.length >= 2) {
+        const gaps = taps.slice(1).map((t, i) => t - taps[i]);
+        const avg = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+        input.value = String(clampTempo(60000 / avg));
+        tapBtn.textContent = `tap the beat · ${input.value}`;
+      }
+      if (taps.length > 6) taps.shift();
+    },
+  });
   sheet.appendChild(sheetBar("Tempo", `${TEMPO_MIN}-${TEMPO_MAX} BPM`, { onDone: setTypedTempo }));
-  sheet.appendChild(el("div", { class: "tempo-sheet" }, [input]));
+  sheet.appendChild(el("div", { class: "tempo-sheet" }, [input, tapBtn]));
   openSheet();
   setTimeout(() => {
     input.focus();
@@ -622,6 +644,15 @@ function clipContent(scene, track) {
     return mini;
   }
   return null;
+}
+
+// Depth made visible: a shortened loop shows its step count, a motion ride
+// shows a wave — bottom-left, mirroring the launch badge.
+function stateBadge(scene, track) {
+  const bits = [];
+  if (track !== "harmony" && stepsFor(scene, track) !== 16) bits.push(String(stepsFor(scene, track)));
+  if (scene.motion?.[track] && Object.keys(scene.motion[track]).length) bits.push("∿");
+  return bits.length ? el("div", { class: "clip-badge state", text: bits.join(" ") }) : null;
 }
 
 function launchBadge(scene, track) {
@@ -817,6 +848,7 @@ function renderSession() {
     }, [
       el("div", { class: "head-name", text: t.name }),
       el("div", { class: "head-ms" }, [trackToggleButton(t.key, "mute"), trackToggleButton(t.key, "solo")]),
+      el("div", { class: "more", text: "⋯" }),
     ]);
     bindTrackHeader(head, t.key);
     grid.appendChild(head);
@@ -826,7 +858,7 @@ function renderSession() {
     const launch = el("div", {
       class: "scenecell",
       "data-scene": String(i),
-    }, [el("div", { class: "tri", text: "▶" }), el("div", { text: scene.tag })]);
+    }, [el("div", { class: "tri", text: "▶" }), el("div", { text: scene.tag }), el("div", { class: "more", text: "⋯" })]);
     bindSceneCell(launch, i);
     refs.row = launch;
     grid.appendChild(launch);
@@ -845,6 +877,8 @@ function renderSession() {
         clip.appendChild(content);
         const badge = launchBadge(scene, t.key);
         if (badge) clip.appendChild(badge);
+        const state = stateBadge(scene, t.key);
+        if (state) clip.appendChild(state);
       } else {
         clip.textContent = "+";
       }
@@ -862,10 +896,11 @@ function renderSession() {
     onclick: openAddSceneSheet,
   }, [el("div", { class: "tri", style: "color:#e8b84b;font-size:22px", text: "+" })]);
   grid.appendChild(addSceneCell);
-  // fill remaining track cells in that last row with blank spacers
-  for (let ti = 0; ti < TRACKS.length; ti++) {
-    grid.appendChild(el("div", { class: "clip empty", style: "opacity:0;pointer-events:none" }));
-  }
+  // The rest of the row is a ghost scene — same tap as +, reads as "more
+  // stacks here" instead of "this is everything".
+  grid.appendChild(
+    el("div", { class: "clip ghost", style: "grid-column: 2 / -1", title: "Add scene", onclick: openAddSceneSheet, text: "+ scene" })
+  );
 
   sessionEl.appendChild(grid);
   applyPlaying();
@@ -1444,32 +1479,12 @@ function openMixer(focusTrack = null) {
     const verbSlider = knob("verb", -30, 0, 1, ms.verb, (v) => { ms.verb = v; audio.setSend(k, v); });
     const echoSlider = knob("echo", -30, 0, 1, ms.echo, (v) => { ms.echo = v; audio.setEcho(k, v); });
 
-    // Device preset selector — all tracks get 3 options
-    const devSection = el("div", { class: "mx-dev-section" });
-    if (k === "drums") {
-      const sel = el("select", { class: "mx-preset" });
-      [...SAMPLE_KIT_NAMES, ...KIT_NAMES].forEach((n) => { const o = el("option", { value: n, text: n }); if (n === audio.kit()) o.selected = true; sel.appendChild(o); });
-      sel.addEventListener("change", () => audio.setKit(sel.value));
-      devSection.append(el("div", { class: "mx-devlabel", text: "kit" }), sel);
-    } else if (k === "harmony") {
-      const sel = el("select", { class: "mx-preset" });
-      HARMONY_PRESET_NAMES.forEach((n) => { const o = el("option", { value: n, text: n }); if (n === audio.harmonyPreset()) o.selected = true; sel.appendChild(o); });
-      sel.addEventListener("change", () => audio.setHarmonyPreset(sel.value));
-      devSection.append(el("div", { class: "mx-devlabel", text: "preset" }), sel);
-    } else if (k === "bass") {
-      const sel = el("select", { class: "mx-preset" });
-      BASS_PRESET_NAMES.forEach((n) => { const o = el("option", { value: n, text: n }); if (n === audio.bassPreset()) o.selected = true; sel.appendChild(o); });
-      sel.addEventListener("change", () => audio.setBassPreset(sel.value));
-      devSection.append(el("div", { class: "mx-devlabel", text: "preset" }), sel);
-    } else {
-      const sel = el("select", { class: "mx-preset" });
-      MELODY_PRESET_NAMES.forEach((n) => { const o = el("option", { value: n, text: n }); if (n === audio.melodyPreset()) o.selected = true; sel.appendChild(o); });
-      sel.addEventListener("change", () => audio.setMelodyPreset(sel.value));
-      devSection.append(el("div", { class: "mx-devlabel", text: "preset" }), sel);
-    }
-    devSection.appendChild(
-      el("div", { class: "mx-sound", text: "✦ sound", "data-action": `sound-${k}`, onclick: () => openSoundSheet(k) })
-    );
+    // One path to the device: the sound sheet. The old preset dropdowns were
+    // a third, flattened way to pick corners the pad already owns.
+    const devSection = el("div", { class: "mx-dev-section" }, [
+      el("div", { class: "mx-devlabel", text: audio.kit && k === "drums" ? `kit · ${audio.kit()}` : `sound · ${k === "harmony" ? audio.harmonyPreset() : k === "bass" ? audio.bassPreset() : audio.melodyPreset()}` }),
+      el("div", { class: "mx-sound", text: "✦ sound", "data-action": `sound-${k}`, onclick: () => openSoundSheet(k) }),
+    ]);
 
     const strip = el("div", { class: "mx-strip" + (focusTrack === k ? " focus" : ""), style: `--tc:${t.color}`, "data-track": k }, [
       el("div", { class: "mx-name" }, [el("span", { class: "mx-dot" }), el("span", { text: t.name })]),
@@ -1521,7 +1536,7 @@ function openSoundSheet(track) {
   const recBtn = el("div", {
     class: "close rec-motion" + (audio.motionArmed(track) ? " on" : ""),
     style: "margin-right:6px",
-    text: "●",
+    text: "● ride",
     title: "Record motion: arm, play, ride the pad",
     "data-action": `motion-rec-${track}`,
     onclick: () => {
@@ -1596,21 +1611,6 @@ function openSoundSheet(track) {
     body.appendChild(padWrap);
   }
 
-  if (isDrums && patch.bank === "sample") {
-    const rows = el("div", { class: "propsection" }, [el("div", { class: "proplabel", text: "one-shots" })]);
-    for (const v of DRUM_VOICES) {
-      const pin = patch.pins?.[v];
-      const label = pin === "user" ? (audio.userSampleName(v) || "your wav") : pin || "follows the kit";
-      rows.appendChild(
-        el("div", { class: "srow", "data-action": `pick-${v}`, onclick: () => openDrumSamplePicker(v) }, [
-          el("div", { class: "srow-voice", style: `--pc:${padHex(v)}`, text: DRUM_META[v].label }),
-          el("div", { class: "srow-pin" + (pin ? " pinned" : ""), text: label }),
-        ])
-      );
-    }
-    body.appendChild(rows);
-  }
-
   const chips = el("div", { class: "choicegrid three" });
   const chipEls = {};
   for (const c of COLOR_NAMES) {
@@ -1630,17 +1630,32 @@ function openSoundSheet(track) {
   if (track !== "harmony") {
     // Per-track pocket: overrides the global GROOV for this track only.
     knobs.push(
-      knob("groove", 0, 0.6, 0.01, song.trackSwing?.[track] ?? song.swing, (v) => {
+      knob("pocket", 0, 0.6, 0.01, song.trackSwing?.[track] ?? song.swing, (v) => {
         (song.trackSwing ||= {})[track] = v;
       }, pctFmt)
     );
   }
   body.appendChild(
     el("div", { class: "propsection" }, [
-      el("div", { class: "proplabel", text: track === "harmony" ? "amount · motion" : "amount · motion · groove" }),
+      el("div", { class: "proplabel", text: track === "harmony" ? "amount · motion" : "amount · motion · pocket" }),
       el("div", { class: "knobrow" }, knobs),
     ])
   );
+
+  if (isDrums && patch.bank === "sample") {
+    const rows = el("div", { class: "propsection" }, [el("div", { class: "proplabel", text: "one-shots" })]);
+    for (const v of DRUM_VOICES) {
+      const pin = patch.pins?.[v];
+      const label = pin === "user" ? (audio.userSampleName(v) || "your wav") : pin || "follows the kit";
+      rows.appendChild(
+        el("div", { class: "srow", "data-action": `pick-${v}`, onclick: () => openDrumSamplePicker(v) }, [
+          el("div", { class: "srow-voice", style: `--pc:${padHex(v)}`, text: DRUM_META[v].label }),
+          el("div", { class: "srow-pin" + (pin ? " pinned" : ""), text: label }),
+        ])
+      );
+    }
+    body.appendChild(rows);
+  }
 
   // A recorded ride lives in the playing scene; offer the way out.
   const sceneIdx = playingTracks[track] >= 0 ? playingTracks[track] : 0;
@@ -1662,6 +1677,15 @@ function openSoundSheet(track) {
     );
   }
   openSheet();
+  // The sheet often cuts cleanly at a section edge and LOOKS complete; hint
+  // that it scrolls, and remove the hint at the first scroll.
+  requestAnimationFrame(() => {
+    if (body.scrollHeight > body.clientHeight + 8) {
+      const hint = el("div", { class: "scroll-hint", text: "⌄" });
+      sheet.appendChild(hint);
+      body.addEventListener("scroll", () => hint.remove(), { once: true });
+    }
+  });
 }
 
 // Per-voice one-shot picker: the bundled library organized by kit character,
@@ -1764,6 +1788,11 @@ function openMicCapture(voice) {
   });
   openSheet();
 }
+
+// Piano-roll zoom: 17px cells are the smallest target in the app, so the
+// roll pages between all 16 steps and fat 8-step halves. Sticky across opens.
+let pianoView = 0; // 0 = 16 steps, 1 = steps 1-8, 2 = steps 9-16
+const PIANO_VIEWS = ["⊞ 16", "◧ 1–8", "◨ 9–16"];
 
 // Polymeter control: how many of the 16 steps this clip actually loops.
 function stepLenControl(scene, track) {
@@ -1871,7 +1900,10 @@ function buildDrumEditor(scene) {
       drumDragMode = scene.drums[v][s0] > 0 ? "delete" : "add";
       scene.drums[v][s0] = drumDragMode === "add" ? 0.9 : 0;
       stepsArr[s0].classList.toggle("on", scene.drums[v][s0] > 0);
-      if (drumDragMode === "add") audio.previewHit(v);
+      if (drumDragMode === "add") {
+        audio.previewHit(v);
+        buzz();
+      }
       refreshClip(editor.scene, "drums");
       if (typeof paintDrums === "function") paintDrums();
       capturePointer(steps, e.pointerId);
@@ -1906,6 +1938,7 @@ function buildDrumEditor(scene) {
       onclick: async () => {
         await ensureStarted();
         audio.previewHit(v);
+        buzz();
       },
     });
     scrollContainer.appendChild(el("div", { class: "drumrow" }, [pad, steps]));
@@ -2034,10 +2067,21 @@ function buildPianoEditor(sceneIndex, scene, track) {
         }),
     }),
     el("div", { class: "tfbtn", text: "Clear", onclick: () => applyTf(() => { for (let s = 0; s < 16; s++) lane[s] = null; }) }),
+    el("div", {
+      class: "tfbtn",
+      text: PIANO_VIEWS[pianoView],
+      "data-action": "piano-zoom",
+      onclick: () => {
+        pianoView = (pianoView + 1) % 3;
+        openEditor(sceneIndex, track);
+      },
+    }),
     stepLenControl(scene, track),
   ]);
   sheet.appendChild(tf);
   const clipLen = stepsFor(scene, track);
+  const viewOff = pianoView === 2 ? 8 : 0;
+  const viewCount = pianoView === 0 ? 16 : 8;
 
   const scrollContainer = el("div", { class: "editor-scroll" });
   const grid = el("div", { class: "proll" });
@@ -2059,11 +2103,11 @@ function buildPianoEditor(sceneIndex, scene, track) {
 
   rows.forEach((midi, ri) => {
     const cells = [];
-    const rowSteps = el("div", { class: "psteps" });
-    for (let s = 0; s < 16; s++) {
+    const rowSteps = el("div", { class: "psteps", style: `grid-template-columns: repeat(${viewCount}, 1fr)` });
+    for (let s = viewOff; s < viewOff + viewCount; s++) {
       const cell = el("div", { class: "pcell", style: `--tc:${tc}` });
       cell.addEventListener("pointerdown", (e) => onNoteDown(e, s, midi, cell));
-      cells.push(cell);
+      cells[s] = cell;
       cursorCols[s].push(cell);
       rowSteps.appendChild(cell);
     }
@@ -2082,12 +2126,12 @@ function buildPianoEditor(sceneIndex, scene, track) {
   const vlane = el("div", { class: "vlane" });
   const vbars = [];
   vlane.appendChild(el("div", { class: "vkey", text: "vel" }));
-  const vsteps = el("div", { class: "vsteps" });
-  for (let s = 0; s < 16; s++) {
+  const vsteps = el("div", { class: "vsteps", style: `grid-template-columns: repeat(${viewCount}, 1fr)` });
+  for (let s = viewOff; s < viewOff + viewCount; s++) {
     const fill = el("i", { style: `--tc:${tc}` });
     const bar = el("div", { class: "vbar" }, [fill]);
     bar.addEventListener("pointerdown", (e) => onVelDown(e, s, bar));
-    vbars.push(fill);
+    vbars[s] = fill;
     vsteps.appendChild(bar);
   }
   vlane.appendChild(vsteps);
@@ -2095,12 +2139,12 @@ function buildPianoEditor(sceneIndex, scene, track) {
 
   function paint() {
     rows.forEach((midi, ri) => {
-      for (let s = 0; s < 16; s++) {
+      for (let s = viewOff; s < viewOff + viewCount; s++) {
         const hit = noteAt(s, midi);
         rowCells[ri][s].className = `pcell${Math.floor(s / 4) % 2 ? "" : " g"}${hit ? " on" : ""}${hit && hit.step === s ? " nstart" : ""}${s >= clipLen ? " off" : ""}`;
       }
     });
-    for (let s = 0; s < 16; s++) {
+    for (let s = viewOff; s < viewOff + viewCount; s++) {
       const notes = noteSlot(lane[s]);
       vbars[s].style.height = notes.length ? Math.round(slotPeakVel(lane[s]) * 100) + "%" : "0%";
       vbars[s].parentElement.style.opacity = notes.length ? 1 : 0.3;
@@ -2136,10 +2180,10 @@ function buildPianoEditor(sceneIndex, scene, track) {
     paint();
     let moved = false;
     const rect = cell.parentElement.getBoundingClientRect();
-    const cw = rect.width / 16;
+    const cw = rect.width / viewCount;
     capturePointer(cell, e.pointerId);
     const move = (ev) => {
-      const cur = Math.max(start, Math.min(15, Math.floor((ev.clientX - rect.left) / cw)));
+      const cur = Math.max(start, Math.min(viewOff + viewCount - 1, viewOff + Math.floor((ev.clientX - rect.left) / cw)));
       const len = cur - start + 1;
       if (len !== note.len) {
         removePitchInRange(lane, midi, start + 1, Math.min(15, start + len - 1), start);
@@ -2247,6 +2291,8 @@ function refreshClip(sceneIndex, track) {
   clip.appendChild(content);
   const badge = launchBadge(song.scenes[sceneIndex], track);
   if (badge) clip.appendChild(badge);
+  const state = stateBadge(song.scenes[sceneIndex], track);
+  if (state) clip.appendChild(state);
 }
 
 // ---------------------------------------------------------------------------
@@ -2288,6 +2334,7 @@ function ensureArrShell() {
         el("div", { class: "dot" }),
         el("div", { class: "nm", text: meta.name }),
         el("div", { class: "ms" }, [trackToggleButton(t, "mute"), trackToggleButton(t, "solo")]),
+        el("div", { class: "more", text: "⋯" }),
       ]);
     bindTrackHeader(head, t);
     headers.appendChild(head);
@@ -2800,10 +2847,11 @@ async function loadProjectFile(file, status) {
 
 function saveLocalProject(status) {
   try {
+    const had = !!localStorage.getItem(LOCAL_PROJECT_KEY);
     localStorage.setItem(LOCAL_PROJECT_KEY, JSON.stringify(captureProject()));
-    status.textContent = "Local snapshot saved";
+    status.textContent = had ? "Kept on this device (replaced the previous one)" : "Kept on this device";
   } catch (e) {
-    status.textContent = "Local save failed: " + e.message;
+    status.textContent = "Save failed: " + e.message;
   }
 }
 
@@ -2811,13 +2859,13 @@ function loadLocalProject(status) {
   try {
     const raw = localStorage.getItem(LOCAL_PROJECT_KEY);
     if (!raw) {
-      status.textContent = "No local snapshot yet";
+      status.textContent = "Nothing kept on this device yet";
       return;
     }
     applyProject(JSON.parse(raw));
-    status.textContent = "Local snapshot loaded";
+    status.textContent = "Loaded from this device";
   } catch (e) {
-    status.textContent = "Local load failed: " + e.message;
+    status.textContent = "Load failed: " + e.message;
   }
 }
 
@@ -2858,8 +2906,8 @@ function openExport() {
       el("div", { class: "exp-grid" }, [
         el("div", { class: "exp-btn", text: "Download Project", "data-action": "download-project", onclick: downloadProject }),
         el("div", { class: "exp-btn", text: "Load Project", "data-action": "load-project", onclick: () => fileInput.click() }),
-        el("div", { class: "exp-btn", text: "Save Local", "data-action": "save-local-project", onclick: () => saveLocalProject(status) }),
-        el("div", { class: "exp-btn", text: "Load Local", "data-action": "load-local-project", onclick: () => loadLocalProject(status) }),
+        el("div", { class: "exp-btn", text: "Keep on device", "data-action": "save-local-project", onclick: () => saveLocalProject(status) }),
+        el("div", { class: "exp-btn", text: "Load from device", "data-action": "load-local-project", onclick: () => loadLocalProject(status) }),
       ]),
       fileInput,
     ])

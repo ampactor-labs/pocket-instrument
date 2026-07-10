@@ -144,7 +144,9 @@ const SAMPLE_KITS = {
   dusty: { gain: -6.5 },
   "808": { gain: -7.5 },
 };
-export const SAMPLE_KIT_NAMES = Object.keys(SAMPLE_KITS);
+// NOT Object.keys(SAMPLE_KITS): "808" is an integer-like key and JS
+// enumerates those first, which silently rotated the corner map once.
+export const SAMPLE_KIT_NAMES = ["street", "warm", "dusty", "808"];
 // Voice balance inside the sample bank (one-shots are peak-normalized, so
 // musical balance is set here, then verified by the calibrate drum stems).
 const SAMPLE_VOICE_DB = { kick: 0, snare: -2, hat: -8, clap: -5 };
