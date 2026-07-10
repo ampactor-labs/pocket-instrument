@@ -234,6 +234,31 @@ try {
   assertState(mixerStillOpen, "play/pause dismissed an open sheet");
   await tap(page, ".tbtn.play");
   await page.screenshot({ path: mixerShotPath, fullPage: true });
+
+  // Sound sheet: morph pad drag, color chip, per-track sound dice.
+  await clickAction(page, "sound-bass");
+  await page.waitForFunction(() => document.querySelector(".sheet-bar .title")?.textContent === "Sound");
+  await page.evaluate(() => {
+    const xy = document.querySelector('[data-action="xy-bass"]');
+    const r = xy.getBoundingClientRect();
+    const opts = { bubbles: true, cancelable: true, pointerId: 2, pointerType: "touch", clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+    xy.dispatchEvent(new PointerEvent("pointerdown", opts));
+    xy.dispatchEvent(new PointerEvent("pointerup", opts));
+  });
+  await wait(200);
+  const morphed = await page.evaluate(() => window.__noodles.audio.patch("bass"));
+  assertState(Math.abs(morphed.x - 0.5) < 0.1 && Math.abs(morphed.y - 0.5) < 0.1, `xy pad tap did not morph to center: ${JSON.stringify(morphed)}`);
+  await clickAction(page, "color-tape");
+  const colored = await page.evaluate(() => window.__noodles.audio.patch("bass").color);
+  assertState(colored === "tape", `color chip did not apply (got ${colored})`);
+  await clickAction(page, "sound-dice-bass");
+  const rolled = await page.evaluate(() => window.__noodles.audio.patch("bass"));
+  assertState(
+    rolled.x >= 0 && rolled.x <= 1 && rolled.y >= 0 && rolled.y <= 1 && rolled.amount >= 0 && rolled.amount <= 1,
+    `sound dice rolled out of range: ${JSON.stringify(rolled)}`
+  );
+  await page.evaluate(() => window.__noodles.audio.setPatch("bass", { x: 0, y: 0, color: "none" }));
+
   await tapAt(page, 200, 70);
   await page.waitForFunction(() => !document.querySelector("#sheet")?.classList.contains("open"));
 

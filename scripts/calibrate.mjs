@@ -200,6 +200,30 @@ try {
       out.master[`${kit}/${h}/${b}/${m}`] = await render(null);
     }
 
+    // The morph space between corners plus every color, per track. Corners
+    // are loudness-matched; the space must inherit it — this is the gate that
+    // keeps "roll any sound" from meaning "roll any level".
+    const SPACE_SPECS = [
+      { label: "center", x: 0.5, y: 0.5, color: "none" },
+      { label: "edge-right", x: 1, y: 0.5, color: "none" },
+      { label: "edge-bottom", x: 0.5, y: 1, color: "none" },
+      { label: "tape", x: 0.5, y: 0.5, color: "tape", amount: 0.7, motion: 0.4 },
+      { label: "crush", x: 0.5, y: 0.5, color: "crush", amount: 0.6, motion: 0.5 },
+      { label: "phase", x: 0.25, y: 0.75, color: "phase", amount: 0.7, motion: 0.5 },
+      { label: "trem", x: 0.75, y: 0.25, color: "trem", amount: 0.7, motion: 0.6 },
+      { label: "wob", x: 0.5, y: 0.5, color: "wob", amount: 0.6, motion: 0.6 },
+    ];
+    out.space = {};
+    for (const t of ["harmony", "bass", "melody"]) {
+      const rows = {};
+      for (const spec of SPACE_SPECS) {
+        audio.setPatch(t, { x: spec.x, y: spec.y, color: spec.color, amount: spec.amount ?? 0.5, motion: spec.motion ?? 0.5 });
+        rows[spec.label] = await render(t);
+      }
+      audio.setPatch(t, { x: 0, y: 0, color: "none", amount: 0.5, motion: 0.5 });
+      out.space[t] = rows;
+    }
+
     // The real thing: press the dice like a user would and render every roll
     // end to end — random key, scale, tempo, presets, magic scene. This is
     // the cohesion check across actual reloads, content variance included.
@@ -225,6 +249,16 @@ try {
       console.log(`\n== bass octave 1 vs 2 (rms dB, hi = above 80 Hz) ==`);
       for (const [p, both] of Object.entries(group)) {
         console.log(`  ${p.padEnd(8)} oct1 ${both[24].rms} (hi ${both[24].hi})  oct2 ${both[36].rms} (hi ${both[36].hi})`);
+      }
+      continue;
+    }
+    if (name === "space") {
+      console.log(`\n== morph space + colors (rms / hi dB per track) ==`);
+      for (const [t, rows] of Object.entries(group)) {
+        console.log(`  ${t} — spread ${spread(rows)} dB`);
+        for (const [label, s] of Object.entries(rows)) {
+          console.log(`    ${label.padEnd(14)} ${String(s.rms).padStart(6)} / ${String(s.hi).padStart(6)}`);
+        }
       }
       continue;
     }
