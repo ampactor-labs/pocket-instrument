@@ -2202,13 +2202,16 @@ function renderArrangement() {
       ruler.appendChild(el("div", { class: "arr-tick", style: `left:${b * ppb}px`, text: String(b + 1) }));
   }
   const loop = song.loop;
+  // The bottom strip of the ruler is the loop's own lane: body drags move it,
+  // either edge grip resizes it, a tap toggles it, and dragging across empty
+  // lane space paints a new loop right there.
+  const lane = el("div", { class: "arr-looplane", onpointerdown: onLoopLaneDown });
   const brace = el("div", {
     class: "arr-loop" + (loop.on ? " on" : ""),
     style: `left:${loop.start * ppb}px; width:${loop.len * ppb}px`,
-  });
-  brace.appendChild(el("div", { class: "lz" }));
-  brace.addEventListener("pointerdown", onLoopDown);
-  ruler.appendChild(brace);
+  }, [el("div", { class: "lz left" }), el("div", { class: "lz right" })]);
+  lane.appendChild(brace);
+  ruler.appendChild(lane);
   content.appendChild(ruler);
 
   ARRANGE_TRACKS.forEach((t) => {
@@ -2314,35 +2317,82 @@ async function onClipDown(e, track, idx, cl, rz) {
   cl.addEventListener("pointerup", up);
 }
 
-function onLoopDown(e) {
+function onLoopLaneDown(e) {
   e.stopPropagation();
-  pushUndo();
+  e.preventDefault();
+  const lane = e.currentTarget;
+  const brace = lane.querySelector(".arr-loop");
   const loop = song.loop;
-  const resize = e.target.classList.contains("lz");
-  const startX = e.clientX;
-  const os = loop.start;
-  const ol = loop.len;
-  let moved = false;
-  const brace = e.currentTarget;
-  capturePointer(brace, e.pointerId);
-  const move = (ev) => {
-    const d = Math.round((ev.clientX - startX) / ppb);
-    if (d !== 0) moved = true;
-    if (resize) loop.len = Math.max(1, ol + d);
-    else loop.start = Math.max(0, os + d);
+  const pre = snapshot();
+  const rect = arrContentEl.getBoundingClientRect();
+  const barAt = (x) => Math.max(0, Math.round((x - rect.left) / ppb));
+  const downBar = barAt(e.clientX);
+  const mode = e.target.classList.contains("left")
+    ? "left"
+    : e.target.classList.contains("right")
+      ? "right"
+      : e.target.closest(".arr-loop")
+        ? "move"
+        : "paint";
+  const o = { start: loop.start, end: loop.start + loop.len };
+  let changed = false;
+  capturePointer(lane, e.pointerId);
+  const apply = () => {
     brace.style.left = loop.start * ppb + "px";
     brace.style.width = loop.len * ppb + "px";
   };
-  const up = () => {
-    brace.removeEventListener("pointermove", move);
-    brace.removeEventListener("pointerup", up);
-    if (!moved) {
-      loop.on = !loop.on;
-      brace.classList.toggle("on", loop.on);
+  const move = (ev) => {
+    const bar = barAt(ev.clientX);
+    if (mode === "move") {
+      const next = Math.max(0, o.start + (bar - downBar));
+      if (next !== loop.start) {
+        loop.start = next;
+        changed = true;
+      }
+    } else if (mode === "right") {
+      const len = Math.max(1, bar - o.start);
+      if (len !== loop.len) {
+        loop.len = len;
+        changed = true;
+      }
+    } else if (mode === "left") {
+      const start = Math.max(0, Math.min(bar, o.end - 1));
+      if (start !== loop.start) {
+        loop.start = start;
+        loop.len = o.end - start;
+        changed = true;
+      }
+    } else if (bar !== downBar) {
+      loop.start = Math.min(downBar, bar);
+      loop.len = Math.max(1, Math.abs(bar - downBar));
+      loop.on = true;
+      brace.classList.add("on");
+      changed = true;
     }
+    apply();
   };
-  brace.addEventListener("pointermove", move);
-  brace.addEventListener("pointerup", up);
+  const up = () => {
+    lane.removeEventListener("pointermove", move);
+    lane.removeEventListener("pointerup", up);
+    lane.removeEventListener("pointercancel", up);
+    if (!changed) {
+      if (mode === "paint") {
+        // Tap on empty lane: bring the loop here, keep its length and state.
+        if (downBar !== loop.start) {
+          loop.start = downBar;
+          changed = true;
+        }
+      } else {
+        loop.on = !loop.on;
+        changed = true;
+      }
+    }
+    if (changed) commitUndo(pre);
+    renderArrangement();
+  };
+  lane.addEventListener("pointermove", move);
+  lane.addEventListener("pointerup", up);
+  lane.addEventListener("pointercancel", up);
 }
 
 function updateArrToolbar() {

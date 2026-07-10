@@ -784,8 +784,10 @@
       .arr-content {
         position: relative;
       }
+      /* Ruler: bar numbers on top, the loop's own lane underneath — big
+         enough that every loop gesture is a thumb gesture. */
       .arr-ruler {
-        height: 28px;
+        height: 46px;
         position: relative;
         border-bottom: 1px solid #000;
         background: #131315;
@@ -796,11 +798,21 @@
         bottom: 0;
         border-left: 1px solid #2b2b2d;
         padding-left: 4px;
+        padding-top: 3px;
         font-size: 9px;
         color: var(--dim);
         font-variant-numeric: tabular-nums;
         display: flex;
-        align-items: center;
+        align-items: flex-start;
+      }
+      .arr-looplane {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 26px;
+        touch-action: none;
+        z-index: 5;
       }
       .arr-lane {
         height: 64px;
@@ -860,24 +872,42 @@
       }
       .arr-loop {
         position: absolute;
-        top: 2px;
-        height: 9px;
-        border-radius: 3px;
+        top: 3px;
+        bottom: 3px;
+        border-radius: 5px;
         background: rgba(232, 184, 75, 0.12);
         border: 1px solid rgba(232, 184, 75, 0.4);
-        touch-action: none;
-        z-index: 5;
       }
       .arr-loop.on {
-        background: rgba(232, 184, 75, 0.34);
-        border-color: rgba(232, 184, 75, 0.9);
+        background: rgba(232, 184, 75, 0.36);
+        border-color: rgba(232, 184, 75, 0.95);
       }
+      /* Visible edge grips, both ends, with hit zones wider than they look. */
       .arr-loop .lz {
         position: absolute;
-        right: -3px;
         top: -3px;
         bottom: -3px;
-        width: 14px;
+        width: 20px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .arr-loop .lz.left {
+        left: -10px;
+      }
+      .arr-loop .lz.right {
+        right: -10px;
+      }
+      .arr-loop .lz::before {
+        content: "";
+        width: 6px;
+        height: 68%;
+        border-radius: 3px;
+        background: rgba(232, 184, 75, 0.5);
+        border: 1px solid rgba(0, 0, 0, 0.6);
+      }
+      .arr-loop.on .lz::before {
+        background: #e8b84b;
       }
       .arr-tools {
         position: absolute;

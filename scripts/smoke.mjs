@@ -225,6 +225,35 @@ try {
   await tap(page, '.arr-thead[data-track="drums"] [data-track-toggle="mute"]');
   await tap(page, '.arr-thead[data-track="drums"] [data-track-toggle="solo"]');
 
+  // Loop lane: drag across empty lane space paints a new loop and enables it;
+  // a tap on the brace toggles it back off.
+  await page.evaluate(() => {
+    const lane = document.querySelector(".arr-looplane");
+    const content = document.querySelector(".arr-content");
+    const r = content.getBoundingClientRect();
+    const ppb = parseFloat(getComputedStyle(content).getPropertyValue("--ppb")) || 37;
+    const y = lane.getBoundingClientRect().top + 12;
+    const opts = (x) => ({ bubbles: true, cancelable: true, pointerId: 7, pointerType: "touch", clientX: r.left + x, clientY: y });
+    lane.dispatchEvent(new PointerEvent("pointerdown", opts(ppb * 5 + 2)));
+    lane.dispatchEvent(new PointerEvent("pointermove", opts(ppb * 7 + 2)));
+    lane.dispatchEvent(new PointerEvent("pointerup", opts(ppb * 7 + 2)));
+  });
+  const painted = await page.evaluate(() => window.__noodles.song.loop);
+  assertState(painted.on && painted.start === 5 && painted.len === 2, `loop paint failed: ${JSON.stringify(painted)}`);
+  await page.evaluate(() => {
+    // Dispatch on the brace itself so e.target matches a real touch there.
+    const brace = document.querySelector(".arr-loop");
+    const content = document.querySelector(".arr-content");
+    const r = content.getBoundingClientRect();
+    const ppb = parseFloat(getComputedStyle(content).getPropertyValue("--ppb")) || 37;
+    const y = brace.getBoundingClientRect().top + 8;
+    const opts = { bubbles: true, cancelable: true, pointerId: 8, pointerType: "touch", clientX: r.left + ppb * 6, clientY: y };
+    brace.dispatchEvent(new PointerEvent("pointerdown", opts));
+    brace.dispatchEvent(new PointerEvent("pointerup", opts));
+  });
+  const toggled = await page.evaluate(() => window.__noodles.song.loop.on);
+  assertState(toggled === false, "brace tap did not toggle the loop off");
+
   await longPress(page, '.arr-thead[data-track="drums"]');
   await page.waitForFunction(() => document.querySelector(".sheet-bar .title")?.textContent === "Track Options");
   await closeSheet(page);
