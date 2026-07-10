@@ -1281,17 +1281,52 @@ function viewMixButton() {
     },
   });
 }
-function meterNode(state) {
-  const peakLine = el("div", { class: "mx-peak-line" });
-  const peakLabel = el("span", { class: "mx-peak-label" });
-  state.peakLine = peakLine;
-  state.peakLabel = peakLabel;
+// One element, both jobs: the meter is the fader. The body fills with RMS
+// (perceived level), an instantaneous peak bar rides above it, a hold tick
+// with a numeric readout marks the recent maximum, and on tracks a handle
+// riding the same column sets the volume — Ableton's channel strip, sized
+// for a thumb.
+function makeVolMeter(state, { withHandle = false } = {}) {
+  state.rmsEl = el("div", { class: "mv-rms" });
+  state.peakEl = el("div", { class: "mv-peak" });
+  state.holdEl = el("div", { class: "mv-hold" });
+  state.labelEl = el("div", { class: "mv-label" });
+  state.rmsDb = -Infinity;
   state.peakDb = -Infinity;
-  return el("div", { class: "mx-meter" }, [
-    el("div", { class: "mx-meter-scale" }, [peakLine, peakLabel]),
-    el("div", { class: "mx-meter-track" }, [state.fill]),
-  ]);
+  state.holdDb = -Infinity;
+  state.holdUntil = 0;
+  const kids = [state.rmsEl, state.peakEl, state.holdEl, state.labelEl];
+  if (withHandle) {
+    state.handleEl = el("div", { class: "mv-handle" });
+    kids.push(state.handleEl);
+  }
+  return el("div", { class: "mx-vol" + (withHandle ? " grab" : "") }, kids);
 }
+
+// Ableton-ish ballistics: RMS attacks fast and releases slow, peak falls at a
+// fixed rate, the hold tick keeps the recent maximum for a beat then lets go.
+function advanceMeter(state, levels, now) {
+  state.rmsDb = Number.isFinite(state.rmsDb)
+    ? state.rmsDb + (levels.rms - state.rmsDb) * (levels.rms > state.rmsDb ? 0.5 : 0.12)
+    : levels.rms;
+  state.peakDb = levels.peak > state.peakDb ? levels.peak : state.peakDb - 1.1;
+  if (levels.peak >= state.holdDb) {
+    state.holdDb = levels.peak;
+    state.holdUntil = now + 1200;
+  } else if (now > state.holdUntil) {
+    state.holdDb -= 0.6;
+  }
+  state.rmsEl.style.transform = `scaleY(${meterLevel(state.rmsDb)})`;
+  const showPeak = Number.isFinite(state.peakDb) && state.peakDb > METER_MIN_DB;
+  state.peakEl.style.display = showPeak ? "block" : "none";
+  if (showPeak) state.peakEl.style.top = `${(1 - meterLevel(state.peakDb)) * 100}%`;
+  const showHold = Number.isFinite(state.holdDb) && state.holdDb > METER_MIN_DB;
+  state.holdEl.style.display = showHold ? "block" : "none";
+  state.labelEl.textContent = showHold ? Math.round(state.holdDb) : "";
+  if (showHold) state.holdEl.style.top = `${(1 - meterLevel(state.holdDb)) * 100}%`;
+}
+
+const volToPct = (db) => (1 - (db - TRACK_VOLUME_MIN_DB) / (TRACK_VOLUME_MAX_DB - TRACK_VOLUME_MIN_DB)) * 100;
 function bindTrackHeader(node, track) {
   let timer = 0;
   let longPressed = false;
@@ -1372,14 +1407,36 @@ function openMixer(focusTrack = null) {
     const k = t.key;
     const ms = mixState[k];
     ms.vol = clampTrackDb(ms.vol);
-    const meterFill = el("i");
-    const mState = { fill: meterFill };
+    const mState = {};
     meterBars[k] = mState;
-    const meter = meterNode(mState);
-
-    const volSlider = el("input", { type: "range", min: String(TRACK_VOLUME_MIN_DB), max: String(TRACK_VOLUME_MAX_DB), step: "1", value: String(ms.vol), class: "mx-vfader" });
+    const volMeter = makeVolMeter(mState, { withHandle: true });
     const volLabel = el("div", { class: "mx-val", text: formatDb(ms.vol) });
-    volSlider.addEventListener("input", () => { ms.vol = clampTrackDb(parseFloat(volSlider.value)); audio.setVol(k, ms.vol); volLabel.textContent = formatDb(ms.vol); });
+    mState.handleEl.style.top = `${volToPct(ms.vol)}%`;
+    // Relative drag anywhere on the column — no jump if you grab off-handle.
+    volMeter.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      const startY = e.clientY;
+      const startVol = ms.vol;
+      const range = TRACK_VOLUME_MAX_DB - TRACK_VOLUME_MIN_DB;
+      const height = volMeter.getBoundingClientRect().height || 1;
+      capturePointer(volMeter, e.pointerId);
+      const move = (ev) => {
+        const next = clampTrackDb(startVol + (-(ev.clientY - startY) / height) * range);
+        if (next === ms.vol) return;
+        ms.vol = next;
+        audio.setVol(k, next);
+        mState.handleEl.style.top = `${volToPct(next)}%`;
+        volLabel.textContent = formatDb(next);
+      };
+      const up = () => {
+        volMeter.removeEventListener("pointermove", move);
+        volMeter.removeEventListener("pointerup", up);
+        volMeter.removeEventListener("pointercancel", up);
+      };
+      volMeter.addEventListener("pointermove", move);
+      volMeter.addEventListener("pointerup", up);
+      volMeter.addEventListener("pointercancel", up);
+    });
 
     const panSlider = knob("pan", -1, 1, 0.05, ms.pan, (v) => { ms.pan = v; audio.setPan(k, v); }, (v) => (v === 0 ? "C" : v < 0 ? `L${Math.round(-v * 100)}` : `R${Math.round(v * 100)}`));
     const verbSlider = knob("verb", -30, 0, 1, ms.verb, (v) => { ms.verb = v; audio.setSend(k, v); });
@@ -1415,9 +1472,7 @@ function openMixer(focusTrack = null) {
     const strip = el("div", { class: "mx-strip" + (focusTrack === k ? " focus" : ""), style: `--tc:${t.color}`, "data-track": k }, [
       el("div", { class: "mx-name" }, [el("span", { class: "mx-dot" }), el("span", { text: t.name })]),
       el("div", { class: "mx-ms" }, [trackToggleButton(k, "mute"), trackToggleButton(k, "solo")]),
-      // Meter beside fader, console-style: both get the full row height
-      // instead of splitting it, and you can watch the meter mid-drag.
-      el("div", { class: "mx-level" }, [meter, volSlider]),
+      volMeter,
       volLabel,
       panSlider,
       verbSlider,
@@ -1426,13 +1481,12 @@ function openMixer(focusTrack = null) {
     ]);
     container.appendChild(strip);
   }
-  const masterFill = el("i");
-  const masterState = { fill: masterFill };
+  const masterState = {};
   meterBars.master = masterState;
   container.appendChild(
     el("div", { class: "mx-strip mx-master", style: "--tc:#d2d2d4", "data-track": "master" }, [
       el("div", { class: "mx-name" }, [el("span", { class: "mx-dot" }), el("span", { text: "Master" })]),
-      meterNode(masterState),
+      makeVolMeter(masterState),
     ])
   );
   sheet.appendChild(container);
@@ -1442,43 +1496,10 @@ function openMixer(focusTrack = null) {
     setTimeout(() => sheet.querySelector(`.mx-strip[data-track="${focusTrack}"]`)?.scrollIntoView({ inline: "center", block: "nearest" }), 30);
   }
   updateTrackMixUI();
-  function updatePeak(state, db) {
-    if (!state || !Number.isFinite(db) || db <= METER_MIN_DB) return;
-    if (db > state.peakDb) {
-      state.peakDb = db;
-      const pct = (1 - meterLevel(db)) * 100;
-      state.peakLine.style.top = `${pct}%`;
-      state.peakLine.style.display = "block";
-      state.peakLabel.style.top = `${pct}%`;
-      state.peakLabel.style.display = "block";
-      state.peakLabel.textContent = Math.round(db);
-    }
-  }
   const tick = () => {
-    for (const t of TRACKS) {
-      const db = audio.meter(t.key);
-      const lvl = meterLevel(db);
-      const state = meterBars[t.key];
-      if (state) {
-        const bar = state.fill;
-        if (bar && Math.abs((bar._lvl || 0) - lvl) > 0.01) {
-          bar.style.transform = `scaleY(${lvl})`;
-          bar._lvl = lvl;
-        }
-        updatePeak(state, db);
-      }
-    }
-    const mdb = audio.meter("master");
-    const mlvl = meterLevel(mdb);
-    const ms = meterBars.master;
-    if (ms) {
-      const bar = ms.fill;
-      if (bar && Math.abs((bar._lvl || 0) - mlvl) > 0.01) {
-        bar.style.transform = `scaleY(${mlvl})`;
-        bar._lvl = mlvl;
-      }
-      updatePeak(ms, mdb);
-    }
+    const now = performance.now();
+    for (const t of TRACKS) advanceMeter(meterBars[t.key], audio.meterLevels(t.key), now);
+    advanceMeter(meterBars.master, audio.meterLevels("master"), now);
     mixerRAF = requestAnimationFrame(tick);
   };
   cancelAnimationFrame(mixerRAF);

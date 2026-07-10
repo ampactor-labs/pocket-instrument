@@ -327,12 +327,14 @@ function buildGraph({ meters = false } = {}) {
     g.echoSends[k] = new Tone.Gain(0).connect(g.echoReturn);
     g.channels[k].connect(g.echoSends[k]);
     if (meters) {
-      g.meters[k] = new Tone.Meter();
+      // Waveform analysers instead of Tone.Meter: one buffer read yields BOTH
+      // RMS (the perceived-level body) and instantaneous peak, Ableton-style.
+      g.meters[k] = new Tone.Analyser({ type: "waveform", size: 256 });
       (k === "drums" ? g.drumBus : g.channels[k]).connect(g.meters[k]);
     }
   }
   if (meters) {
-    g.masterMeter = new Tone.Meter();
+    g.masterMeter = new Tone.Analyser({ type: "waveform", size: 256 });
     g.masterLimiter.connect(g.masterMeter);
   }
 
@@ -1090,10 +1092,18 @@ export function createAudio(song) {
       channelState[track].solo = !!on;
       applyTrackGates();
     },
-    meter(track) {
+    // RMS + instantaneous peak in dB from one waveform read.
+    meterLevels(track) {
       const m = track === "master" ? live.masterMeter : live.meters[track];
-      const v = m.getValue();
-      return typeof v === "number" ? v : Math.max(...v);
+      const buf = m.getValue();
+      let peak = 0;
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) {
+        const a = Math.abs(buf[i]);
+        if (a > peak) peak = a;
+        sum += buf[i] * buf[i];
+      }
+      return { peak: Tone.gainToDb(peak), rms: Tone.gainToDb(Math.sqrt(sum / buf.length)) };
     },
     // --- devices: patches ---
     patch(track) {

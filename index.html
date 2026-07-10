@@ -1048,87 +1048,76 @@
         background: var(--tc);
         flex-shrink: 0;
       }
-      .mx-level {
-        display: flex;
-        gap: 6px;
-        width: 100%;
-        height: 126px;
-        align-items: stretch;
-        justify-content: center;
-      }
-      .mx-meter {
-        width: 16px;
-        height: 72px;
+      /* The fader IS the meter: RMS body, instantaneous peak bar, hold tick
+         with a numeric readout, and (on tracks) the volume handle riding the
+         same column. */
+      .mx-vol {
+        position: relative;
+        width: 44px;
+        height: 132px;
         background: #111;
         border: 1px solid #000;
-        border-radius: 4px;
+        border-radius: 5px;
         overflow: hidden;
-        position: relative;
       }
-      .mx-level .mx-meter {
-        height: auto;
-        flex: 0 0 15px;
+      .mx-vol.grab {
+        touch-action: none;
+        cursor: ns-resize;
       }
-      .mx-level .mx-vfader {
-        height: 100%;
-        width: 32px;
-      }
-      .mx-master .mx-meter {
-        width: 20px;
+      .mx-master .mx-vol {
+        width: 26px;
         flex: 1 1 0;
         height: auto;
       }
-      .mx-meter-track {
+      .mv-rms {
         position: absolute;
         inset: 0;
-        display: flex;
-        align-items: flex-end;
-        z-index: 1;
-      }
-      .mx-meter-track i {
-        display: block;
-        width: 100%;
-        height: 100%;
         transform: scaleY(0);
         transform-origin: bottom;
         will-change: transform;
         background: linear-gradient(0deg, #4caf50, #e8b84b 70%, #d24b4b);
-        border-radius: 3px;
-      }
-      .mx-meter-scale {
-        position: absolute;
-        inset: 2px;
-        z-index: 2;
         pointer-events: none;
-        color: rgba(255, 255, 255, 0.72);
-        font-size: 7px;
-        font-weight: 900;
-        line-height: 1;
-        text-shadow: 0 1px 2px #000;
       }
-      .mx-peak-line {
+      .mv-peak {
+        position: absolute;
+        left: 0;
+        right: 0;
+        height: 2px;
+        background: rgba(255, 255, 255, 0.85);
+        display: none;
+        pointer-events: none;
+      }
+      .mv-hold {
         position: absolute;
         left: 0;
         right: 0;
         height: 0;
-        border-top: 1px solid rgba(255, 255, 255, 0.5);
+        border-top: 1px solid #fff;
         display: none;
         pointer-events: none;
       }
-      .mx-peak-label {
+      .mv-label {
         position: absolute;
-        right: 1px;
-        transform: translateY(-100%);
-        white-space: nowrap;
-        display: none;
+        top: 2px;
+        right: 3px;
+        font-size: 8px;
+        font-weight: 900;
+        line-height: 1;
+        color: rgba(255, 255, 255, 0.75);
+        text-shadow: 0 1px 2px #000;
         pointer-events: none;
       }
-      .mx-vfader {
-        writing-mode: vertical-lr;
-        direction: rtl;
-        height: 64px;
-        width: 24px;
-        accent-color: var(--tc);
+      .mv-handle {
+        position: absolute;
+        left: 1px;
+        right: 1px;
+        height: 10px;
+        margin-top: -5px;
+        border-radius: 4px;
+        background: color-mix(in srgb, var(--tc) 55%, #222);
+        border: 1px solid color-mix(in srgb, var(--tc) 85%, #fff);
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.55);
+        pointer-events: none;
       }
       .mx-val {
         font-size: 9px;
