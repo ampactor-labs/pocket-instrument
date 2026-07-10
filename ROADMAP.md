@@ -18,7 +18,8 @@ headless gates (`npm run smoke`, `npm run calibrate`).
 
 Shipped since the last revision: clip launch modes + follow-actions, the vertical mixer,
 sends, sidechain duck, per-preset loudness calibration, session record, WAV/stem export,
-project files, and the dice.
+project files, the dice, and the morphable devices (XY pad between the preset corners +
+color/motion slot per track, calibration-gated).
 
 ## Performance (Galaxy A16 5G / Dimensity 6300)
 

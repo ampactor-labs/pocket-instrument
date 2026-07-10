@@ -35,10 +35,13 @@ Session and Arrangement views over one song model, with quantized scene launch
 and per-clip launch modes (loop or one-shot) plus follow-actions. Four clip
 editors — a chord picker, a drum rack, and two piano rolls — each with a
 velocity lane. A vertical mixer: fader, pan, reverb and echo sends, live
-meters with peak hold, and a device preset picker per track. The presets are
-loudness-matched by measurement (`npm run calibrate`), so the randomized cold
-open — key, scale, tempo, sounds, one magic scene, rerollable anytime with the
-🎲 button — changes the flavor of the song, never the balance of the mix.
+meters with peak hold, and a device per track that goes deeper than a preset
+list — the four preset names are corners of an XY morph pad (tap "sound" on
+any strip), with a color slot (tape, crush, phase, trem, wob), amount and
+motion knobs, and a per-track sound dice. The whole space is loudness-matched
+by measurement (`npm run calibrate`), so the randomized cold open — key,
+scale, tempo, sounds, one magic scene, rerollable anytime with the 🎲 button —
+changes the flavor of the song, never the balance of the mix.
 Everything melodic ducks under the kick. Arm record and your scene launches
 get written into the arrangement as you play. WAV export (master and four
 stems) renders through the same signal chain you hear live. Projects save to
