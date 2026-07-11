@@ -882,7 +882,9 @@
         overflow-y: hidden;
         position: relative;
         -webkit-overflow-scrolling: touch;
-        touch-action: pan-x;
+        /* attachArrGestures owns panning and pinch-zoom, so keep the browser's
+           own touch scrolling out of the way — otherwise it eats the gesture. */
+        touch-action: none;
       }
       .arr-content {
         position: relative;
