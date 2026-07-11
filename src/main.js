@@ -934,17 +934,19 @@ function setActiveTracks(activeScenes) {
   playingScene = first >= 0 && TRACKS.every((t) => playingTracks[t.key] === first) ? first : -1;
   applyPlaying();
 }
-// Pie timers, pinned to the audio clock. Each frame, read the position being
-// HEARD right now (audio.heardNow) and set every playing clip's pie to the
-// exact fraction through its loop: prog = (now - cycleStart) / cycleDur. No CSS
-// transition interpolating on a second clock, no dependence on a discrete event
-// landing on this frame — the pie is a direct function of playback, re-derived
-// every frame, so it can't drift. Residual limits: one display frame of
-// granularity, and the platform's output-latency estimate (see audio.heardNow).
+// Playback visuals, pinned to the audio clock. Each frame, read the position
+// being HEARD right now (audio.heardNow) and derive every playing clip's pie —
+// prog = (now - cycleStart) / cycleDur — and the arrangement playhead's bar
+// from their anchors. No CSS transition interpolating on a second clock, no
+// dependence on a discrete event landing on this frame — both are pure
+// functions of playback, re-derived every frame, so they can't drift. Residual
+// limits: one display frame of granularity, and the platform's output-latency
+// estimate (see audio.heardNow).
 let pieAnchors = {}; // track -> { start, dur } in AudioContext seconds
-let piePumpRAF = 0;
-function piePump() {
-  piePumpRAF = 0;
+let arrAnchor = null; // { start, barSec, len, loop } for the arrangement playhead
+let clockPumpRAF = 0;
+function clockPump() {
+  clockPumpRAF = 0;
   const now = audio.heardNow();
   for (const t of TRACKS) {
     const a = pieAnchors[t.key];
@@ -955,7 +957,14 @@ function piePump() {
     const prog = a.dur > 0 ? Math.min(1, Math.max(0, (now - a.start) / a.dur)) : 0;
     clipEl.style.setProperty("--pct", (prog * 100).toFixed(2));
   }
-  if (audio.playing) piePumpRAF = requestAnimationFrame(piePump);
+  if (arrAnchor && arrPlayhead) {
+    let barF = (now - arrAnchor.start) / arrAnchor.barSec;
+    const lp = arrAnchor.loop;
+    if (lp && barF >= lp.end) barF = lp.start + ((barF - lp.start) % (lp.end - lp.start));
+    barF = Math.max(0, Math.min(barF, arrAnchor.len));
+    arrPlayhead.style.transform = `translateX(${barF * ppb}px)`;
+  }
+  if (audio.playing) clockPumpRAF = requestAnimationFrame(clockPump);
 }
 
 function applyPlaying() {
@@ -2434,10 +2443,11 @@ function renderArrangement() {
     content.appendChild(lane);
   });
 
-  const stepDur = (60 / song.tempo / 4).toFixed(3);
+  // No transition: while playing, the clock pump re-derives the transform from
+  // the audio clock every frame; stopped, it sits where playback left it.
   arrPlayhead = el("div", {
     class: "arr-playhead",
-    style: `transform:translateX(${arrPlayBar * ppb}px); transition:transform ${stepDur}s linear`,
+    style: `transform:translateX(${arrPlayBar * ppb}px)`,
   });
   content.appendChild(arrPlayhead);
 
@@ -2460,6 +2470,7 @@ function makeAutoPan(getClientX, onFrame) {
   let raf = 0;
   const tick = () => {
     raf = 0;
+    if (arrPinching) return; // a pinch owns the viewport — no edge-panning under it
     const x = getClientX();
     const vw = arrScroll.getBoundingClientRect();
     let v = 0;
@@ -2546,6 +2557,7 @@ async function onClipDown(e, track, idx, cl, rz) {
   };
   const pan = makeAutoPan(() => lastX, () => applyFromXY(lastX, lastY));
   const move = (ev) => {
+    if (arrPinching) return; // second finger landed — the pinch owns this touch now
     lastX = ev.clientX;
     lastY = ev.clientY;
     applyFromXY(ev.clientX, ev.clientY);
@@ -2622,6 +2634,7 @@ function onLoopLaneDown(e) {
   };
   const pan = makeAutoPan(() => lastX, () => applyFromX(lastX));
   const move = (ev) => {
+    if (arrPinching) return; // second finger landed — the pinch owns this touch now
     lastX = ev.clientX;
     applyFromX(ev.clientX);
     pan.poke();
@@ -2722,16 +2735,29 @@ const ARR_TAP_SLOP = 8;
 function attachArrGestures(scroll) {
   const leftOf = () => scroll.getBoundingClientRect().left;
   let startDist = 0, startPpb = 0, focalPx = 0, startScroll = 0, lastScale = 1, lastMid = 0, pinching = false;
+  let tapId = -1, tapX = 0, tapY = 0, tapTarget = null, tapMoved = false;
+  const clearTap = () => { tapId = -1; tapTarget = null; };
+
+  // A canceled or orphaned pinch must never commit: snap the transform away
+  // and keep the old ppb. Committing a stale scale later (e.g. from the
+  // touchcancel a native-scroll takeover fires) teleports the view.
+  const abandonPinch = () => {
+    pinching = false; arrPinching = false;
+    if (arrContentEl) arrContentEl.style.transform = "";
+  };
 
   scroll.addEventListener("touchstart", (e) => {
     if (e.touches.length === 2) {
       pinching = true; arrPinching = true;
+      clearTap(); // the first finger's tap candidate is void — this is a pinch
       const [a, b] = e.touches;
       startDist = Math.max(1, Math.abs(a.clientX - b.clientX));
       startPpb = ppb;
       startScroll = scroll.scrollLeft;
       focalPx = startScroll + ((a.clientX + b.clientX) / 2 - leftOf()); // content px under the pinch center
       lastScale = 1;
+    } else if (pinching) {
+      abandonPinch(); // a new touch arrived but the pair is gone — stale pinch
     }
   }, { passive: true });
 
@@ -2751,17 +2777,23 @@ function attachArrGestures(scroll) {
   const endPinch = (e) => {
     if (!pinching || e.touches.length >= 2) return;
     pinching = false; arrPinching = false;
+    // A two-finger tap that never spread isn't a zoom — don't burn a full
+    // rebuild on it, just drop any sub-percent transform.
+    if (Math.abs(lastScale - 1) < 0.02) {
+      arrContentEl.style.transform = "";
+      return;
+    }
     ppb = Math.max(ARR_MIN_PPB, Math.min(ARR_MAX_PPB, startPpb * lastScale));
     renderArrangement(); // real layout at the new ppb; the transform dies with the old content
     const max = Math.max(0, scroll.scrollWidth - scroll.clientWidth);
     scroll.scrollLeft = Math.max(0, Math.min(max, focalPx * lastScale - lastMid));
   };
   scroll.addEventListener("touchend", endPinch);
-  scroll.addEventListener("touchcancel", endPinch);
+  // Deliberate release commits; a system-canceled gesture reverts.
+  scroll.addEventListener("touchcancel", () => { if (pinching) abandonPinch(); });
 
   // Tap to drop a clip / move the playhead, without stealing the scroll: track
   // one pointer, and only act if it neither moved past the slop nor pinched.
-  let tapId = -1, tapX = 0, tapY = 0, tapTarget = null, tapMoved = false;
   scroll.addEventListener("pointerdown", (e) => {
     if (pinching) return;
     tapId = e.pointerId; tapX = e.clientX; tapY = e.clientY; tapMoved = false;
@@ -2772,7 +2804,6 @@ function attachArrGestures(scroll) {
   scroll.addEventListener("pointermove", (e) => {
     if (e.pointerId === tapId && Math.hypot(e.clientX - tapX, e.clientY - tapY) > ARR_TAP_SLOP) tapMoved = true;
   });
-  const clearTap = () => { tapId = -1; tapTarget = null; };
   scroll.addEventListener("pointerup", (e) => {
     if (e.pointerId === tapId && !tapMoved && !pinching && tapTarget) {
       if (tapTarget.kind === "ruler") arrRulerTap(tapX);
@@ -2959,61 +2990,88 @@ function loadLocalProject(status) {
   }
 }
 
+// A render outlives the sheet: results and status live at module level, and
+// openExport re-binds them to whatever sheet is currently on screen. Closing
+// the sheet mid-render loses nothing \u2014 reopen and the finished files are there.
 let exporting = false;
-function openExport() {
-  resetSheet("#e8b84b");
-  const status = el("div", { class: "exp-status", text: "" });
-  const links = el("div", { class: "exp-links" });
-  const fileInput = el("input", { class: "project-file", type: "file", accept: ".noodles,application/json" });
-  fileInput.addEventListener("change", () => loadProjectFile(fileInput.files?.[0], status));
+let exportOffers = []; // { url, blob, name, label }
+let expStatusEl = null;
+let expLinksEl = null;
 
-  // A WAV render runs for several seconds; on a phone that outlives the tap's
-  // transient activation, so a script-triggered download after the await is
-  // silently blocked \u2014 the status said "exported" but no file ever landed.
-  // Hand the finished file back as a button the user taps: a fresh gesture
-  // that downloads, or opens the native share sheet, reliably.
-  function offerSave(blob, name, label) {
-    const url = URL.createObjectURL(blob);
-    const a = el("a", { class: "exp-btn save", href: url, download: name, text: `\u2913  ${label}` });
+function setExportStatus(text) {
+  if (expStatusEl?.isConnected) expStatusEl.textContent = text;
+}
+
+function clearExportOffers() {
+  for (const o of exportOffers) URL.revokeObjectURL(o.url); // don't leak old WAV blobs
+  exportOffers = [];
+  renderExportOffers();
+}
+
+// A WAV render runs for several seconds; on a phone that outlives the tap's
+// transient activation, so a script-triggered download after the await is
+// silently blocked \u2014 the status said "exported" but no file ever landed.
+// Hand the finished file back as a button the user taps: a fresh gesture
+// that downloads, or opens the native share sheet, reliably.
+function renderExportOffers() {
+  if (!expLinksEl?.isConnected) return;
+  expLinksEl.innerHTML = "";
+  for (const o of exportOffers) {
+    const a = el("a", { class: "exp-btn save", href: o.url, download: o.name, text: `\u2913  ${o.label}` });
     a.addEventListener("click", async (e) => {
       try {
-        const file = new File([blob], name, { type: "audio/wav" });
+        const file = new File([o.blob], o.name, { type: "audio/wav" });
         if (navigator.canShare?.({ files: [file] })) {
           e.preventDefault();
-          await navigator.share({ files: [file], title: name });
+          await navigator.share({ files: [file], title: o.name });
         }
       } catch { /* share dismissed or unsupported \u2014 the download attribute stands in */ }
     });
-    links.appendChild(a);
+    expLinksEl.appendChild(a);
   }
+}
 
-  async function doExport(mode) {
-    if (exporting) return;
-    exporting = true;
-    links.innerHTML = "";
-    status.textContent = mode === "loop" ? "Rendering loop\u2026" : mode === "master" ? "Rendering master\u2026" : "Rendering stems\u2026";
-    try {
-      if (mode === "loop") {
-        const buf = await audio.renderOffline(null, { loop: { start: song.loop.start, len: song.loop.len } });
-        offerSave(encodeWav(buf), "noodles-loop.wav", `Save loop \u00b7 ${song.loop.len} ${song.loop.len === 1 ? "bar" : "bars"}`);
-        status.textContent = "Seamless loop ready \u2014 tap to save:";
-      } else if (mode === "master") {
-        const buf = await audio.renderOffline(null);
-        offerSave(encodeWav(buf), "noodles-master.wav", "Save master WAV");
-        status.textContent = "Master ready \u2014 tap to save:";
-      } else {
-        for (const t of TRACKS) {
-          status.textContent = `Rendering ${t.name}\u2026`;
-          const buf = await audio.renderOffline(t.key);
-          offerSave(encodeWav(buf), `noodles-${t.key}.wav`, `Save ${t.name} stem`);
-        }
-        status.textContent = "Stems ready \u2014 tap to save:";
+function offerSave(blob, name, label) {
+  exportOffers.push({ url: URL.createObjectURL(blob), blob, name, label });
+  renderExportOffers();
+}
+
+async function doExport(mode) {
+  if (exporting) return;
+  exporting = true;
+  clearExportOffers();
+  setExportStatus(mode === "loop" ? "Rendering loop\u2026" : mode === "master" ? "Rendering master\u2026" : "Rendering stems\u2026");
+  try {
+    if (mode === "loop") {
+      const buf = await audio.renderOffline(null, { loop: { start: song.loop.start, len: song.loop.len } });
+      offerSave(encodeWav(buf), "noodles-loop.wav", `Save loop \u00b7 ${song.loop.len} ${song.loop.len === 1 ? "bar" : "bars"}`);
+      setExportStatus("Seamless loop ready \u2014 tap to save:");
+    } else if (mode === "master") {
+      const buf = await audio.renderOffline(null);
+      offerSave(encodeWav(buf), "noodles-master.wav", "Save master WAV");
+      setExportStatus("Master ready \u2014 tap to save:");
+    } else {
+      for (const t of TRACKS) {
+        setExportStatus(`Rendering ${t.name}\u2026`);
+        const buf = await audio.renderOffline(t.key);
+        offerSave(encodeWav(buf), `noodles-${t.key}.wav`, `Save ${t.name} stem`);
       }
-    } catch (e) {
-      status.textContent = "Export failed: " + e.message;
+      setExportStatus("Stems ready \u2014 tap to save:");
     }
-    exporting = false;
+  } catch (e) {
+    setExportStatus("Export failed: " + e.message);
   }
+  exporting = false;
+}
+
+function openExport() {
+  resetSheet("#e8b84b");
+  const status = el("div", { class: "exp-status", text: exporting ? "Rendering\u2026" : "" });
+  const links = el("div", { class: "exp-links" });
+  expStatusEl = status;
+  expLinksEl = links;
+  const fileInput = el("input", { class: "project-file", type: "file", accept: ".noodles,application/json" });
+  fileInput.addEventListener("change", () => loadProjectFile(fileInput.files?.[0], status));
 
   sheet.appendChild(sheetBar("Export", "project · WAV"));
   sheet.appendChild(
@@ -3046,6 +3104,7 @@ function openExport() {
   sheet.appendChild(el("div", { class: "propsection" }, audioSection));
   sheet.appendChild(status);
   sheet.appendChild(links);
+  renderExportOffers(); // finished renders from an earlier open are still here
   openSheet();
 }
 
@@ -3056,7 +3115,11 @@ audio.onVisual((e) => {
   if (e.type === "arr") {
     const frac = e.bar + e.stepInBar / 16;
     arrPlayBar = e.bar;
-    if (arrPlayhead) arrPlayhead.style.transform = `translateX(${frac * ppb}px)`;
+    if (e.anchor) {
+      arrAnchor = e.anchor; // the clock pump owns the playhead transform
+      pieAnchors = {}; // and arrangement mode owns it — drop stale scene pies
+      if (!clockPumpRAF) clockPumpRAF = requestAnimationFrame(clockPump);
+    }
     // Follow the playhead by paging, but yield during a pinch and for a moment
     // after a manual scroll, so a look-ahead isn't yanked back under you.
     if (arrScroll && !arrPinching && Date.now() > arrFollowResumeAt) {
@@ -3113,7 +3176,8 @@ audio.onVisual((e) => {
 
     if (e.anchors) {
       pieAnchors = e.anchors;
-      if (!piePumpRAF) piePumpRAF = requestAnimationFrame(piePump);
+      arrAnchor = null; // scene mode owns the pump; don't crawl a stale playhead
+      if (!clockPumpRAF) clockPumpRAF = requestAnimationFrame(clockPump);
     }
 
     if (editor && editor.cursorCols) {

@@ -157,8 +157,10 @@ velocity lane; vertical mixer strips (fader, pan, reverb + echo sends, live mete
 hold, preset pickers); loudness-matched device presets per track; randomized-but-balanced
 cold open (key, scale, tempo, presets, magic scene) plus a 🎲 button that rerolls it all;
 global Key + Scale (the whole app transposes and re-snaps in key); one-tap Transforms;
-undo/redo; groove/swing; WAV export (master + four stems) rendered through the same graph
-as live playback; project save/load to file and localStorage; GitHub Pages deploy on push.
+undo/redo; groove/swing; WAV export (master + four stems, plus a seamless loop render when
+the arrangement loop is set) through the same graph as live playback, handed back as
+tap-to-save buttons because a long render outlives a phone tap's transient activation;
+project save/load to file and localStorage; GitHub Pages deploy on push.
 
 ## What's next (priority order — from `ROADMAP.md`)
 

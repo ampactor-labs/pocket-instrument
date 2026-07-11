@@ -957,7 +957,17 @@ export function createAudio(song) {
     const stepInBar = arrStep % 16;
     const chord = playArrangementStepOn(live, patches, liveVoice, song, bar, stepInBar, time);
     if (chord !== null) scheduleVisual(() => visualCb({ type: "arrchord", bar, chord }), time);
-    scheduleVisual(() => visualCb({ type: "arr", bar, stepInBar, len }), time);
+    // Anchor for the playhead pump: the AudioContext time bar 0 would have
+    // sounded, plus the live loop region so the visual wraps exactly when the
+    // audio does. Same no-second-clock construction as the pie anchors.
+    const stepDur = 15 / song.tempo;
+    const anchor = {
+      start: time - arrStep * stepDur,
+      barSec: stepDur * 16,
+      len,
+      loop: song.loop && song.loop.on ? { start: song.loop.start, end: song.loop.start + song.loop.len } : null,
+    };
+    scheduleVisual(() => visualCb({ type: "arr", bar, stepInBar, len, anchor }), time);
     arrStep += 1;
     const loop = song.loop;
     if (loop && loop.on) {

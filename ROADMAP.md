@@ -32,7 +32,8 @@ smoothly on the same Web Audio API on this device class. So: optimize, don't swi
 
 Done: convolution reverb → Freeverb; pad 24-voice fatsaw → 4-voice single saw; MetalSynth
 hat → filtered noise burst; `latencyHint: "playback"` with `lookAhead 0.25` (scheduling
-survives main-thread jank); pinch rebuilds coalesced to ≤1/frame; meters transform-only and
+survives main-thread jank); pinch zoom scales a CSS transform and commits ONE rebuild on
+release (no per-frame rebuild at all); meters transform-only and
 only while the mixer is open; morph voices capped at the top-2 corners (2x a single synth,
 never 4x); colors pay-per-roll; sample drums cost buffer playback instead of synthesis;
 grid class sweeps dirty-checked per 16th; **idle park** — the context suspends ~6 s after
