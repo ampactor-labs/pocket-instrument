@@ -359,11 +359,13 @@ function buildGraph({ meters = false } = {}) {
   // Sends. Algorithmic (Freeverb) instead of convolution — far cheaper per
   // sample on a low-end mobile CPU, and fine for a send reverb. The highpass
   // on the reverb input keeps kicks and 808 subs out of the tail: reverberant
-  // low end reads as mud, not space.
+  // low end reads as mud, not space. The echo carries the same highpass, a
+  // touch lower, so its repeats don't pile low-end into the feedback loop.
   g.reverb = new Tone.Freeverb({ roomSize: 0.72, dampening: 2600, wet: 1 }).connect(g.master);
   g.reverbHP = new Tone.Filter({ type: "highpass", frequency: 200, Q: 0.7 }).connect(g.reverb);
   g.echo = new Tone.FeedbackDelay({ delayTime: "8n", feedback: 0.26, wet: 1 }).connect(g.master);
-  g.echoReturn = new Tone.Gain(Tone.dbToGain(-4)).connect(g.echo);
+  g.echoHP = new Tone.Filter({ type: "highpass", frequency: 160, Q: 0.7 }).connect(g.echo);
+  g.echoReturn = new Tone.Gain(Tone.dbToGain(-4)).connect(g.echoHP);
 
   // Everything melodic passes through the kick-side duck; drums get a dry bus
   // plus a parallel-compressed return for weight.
