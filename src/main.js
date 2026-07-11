@@ -2683,79 +2683,80 @@ function updateArrToolbar() {
 // Arrangement gestures. One finger taps to drop a clip / move the playhead and
 // drags to pan the timeline; two fingers pinch-zoom, anchored so the bar under
 // your fingers stays put instead of drifting. Clips and the loop grip claim
-// their own pointers (stopPropagation), so grabbing one never starts a pan.
-// The pinch scales the existing DOM with a transform and commits real layout
-// once, on release — no per-frame rebuild to stutter on a cheap phone.
+// their own pointers (stopPropagation), so grabbing one never drops a clip.
+//
+// Panning is the browser's own inertial scroll (touch-action: pan-x) — the
+// flick-with-momentum feel of a real timeline, which a manual scrollLeft can't
+// match. We intercept ONLY the two-finger pinch, over Touch events with
+// preventDefault so native scroll doesn't fight it, and scale the existing DOM
+// with a transform that commits real layout once on release (no per-frame
+// rebuild to stutter a cheap phone). Taps are read over pointer events: a drag
+// scrolls natively and fires pointercancel, so only a clean tap dispatches.
 const ARR_MIN_PPB = 22;
 const ARR_MAX_PPB = 220;
 const ARR_TAP_SLOP = 8;
 function attachArrGestures(scroll) {
-  const pts = new Map(); // pointerId -> clientX
-  let mode = "idle"; // idle | tap | pan | pinch
-  let downId = -1, downX = 0, downY = 0, downScroll = 0, downTarget = null, moved = false;
-  let startDist = 0, startPpb = 0, focalPx = 0, startScroll = 0, lastScale = 1, lastMid = 0;
   const leftOf = () => scroll.getBoundingClientRect().left;
-  const targetInfo = (e) => {
-    if (e.target.closest(".arr-ruler")) return { kind: "ruler" };
-    const lane = e.target.closest(".arr-lane");
-    return lane ? { kind: "lane", track: lane.dataset.track } : null;
-  };
+  let startDist = 0, startPpb = 0, focalPx = 0, startScroll = 0, lastScale = 1, lastMid = 0, pinching = false;
 
-  scroll.addEventListener("pointerdown", (e) => {
-    scroll.setPointerCapture?.(e.pointerId);
-    pts.set(e.pointerId, e.clientX);
-    if (pts.size === 1) {
-      mode = "tap"; moved = false; downId = e.pointerId;
-      downX = e.clientX; downY = e.clientY; downScroll = scroll.scrollLeft;
-      downTarget = targetInfo(e);
-    } else if (pts.size === 2) {
-      mode = "pinch";
-      const xs = [...pts.values()];
-      startDist = Math.max(1, Math.abs(xs[0] - xs[1]));
+  scroll.addEventListener("touchstart", (e) => {
+    if (e.touches.length === 2) {
+      pinching = true;
+      const [a, b] = e.touches;
+      startDist = Math.max(1, Math.abs(a.clientX - b.clientX));
       startPpb = ppb;
       startScroll = scroll.scrollLeft;
-      focalPx = startScroll + ((xs[0] + xs[1]) / 2 - leftOf()); // content px under the pinch center
+      focalPx = startScroll + ((a.clientX + b.clientX) / 2 - leftOf()); // content px under the pinch center
+      lastScale = 1;
     }
-  });
+  }, { passive: true });
 
-  scroll.addEventListener("pointermove", (e) => {
-    if (!pts.has(e.pointerId)) return;
-    pts.set(e.pointerId, e.clientX);
-    if (mode === "pinch" && pts.size >= 2) {
-      const xs = [...pts.values()];
-      const dist = Math.max(1, Math.abs(xs[0] - xs[1]));
-      const targetPpb = Math.max(ARR_MIN_PPB, Math.min(ARR_MAX_PPB, startPpb * (dist / startDist)));
-      const scale = targetPpb / startPpb;
-      const mid = (xs[0] + xs[1]) / 2 - leftOf();
-      // Keep the focal bar pinned under the (possibly sliding) finger center.
+  scroll.addEventListener("touchmove", (e) => {
+    if (e.touches.length === 2) {
+      e.preventDefault(); // hold off native scroll for the duration of the pinch
+      const [a, b] = e.touches;
+      const dist = Math.max(1, Math.abs(a.clientX - b.clientX));
+      const scale = Math.max(ARR_MIN_PPB, Math.min(ARR_MAX_PPB, startPpb * (dist / startDist))) / startPpb;
+      const mid = (a.clientX + b.clientX) / 2 - leftOf();
       arrContentEl.style.transformOrigin = "0 0";
-      arrContentEl.style.transform = `translateX(${mid - focalPx * scale + startScroll}px) scaleX(${scale})`;
+      arrContentEl.style.transform = `translateX(${mid - focalPx * scale + startScroll}px) scaleX(${scale})`; // focal bar stays put
       lastScale = scale; lastMid = mid;
-    } else if ((mode === "tap" || mode === "pan") && e.pointerId === downId) {
-      if (!moved && Math.hypot(e.clientX - downX, e.clientY - downY) > ARR_TAP_SLOP) { moved = true; mode = "pan"; }
-      if (mode === "pan") scroll.scrollLeft = downScroll - (e.clientX - downX);
     }
-  });
+  }, { passive: false });
 
-  const up = (e) => {
-    if (mode === "pinch") {
-      ppb = Math.max(ARR_MIN_PPB, Math.min(ARR_MAX_PPB, startPpb * lastScale));
-      renderArrangement(); // real layout at the new ppb; the transform dies with the old content
-      const max = Math.max(0, scroll.scrollWidth - scroll.clientWidth);
-      scroll.scrollLeft = Math.max(0, Math.min(max, focalPx * lastScale - lastMid));
-    } else if (mode === "tap" && !moved && e.pointerId === downId && downTarget) {
-      if (downTarget.kind === "ruler") arrRulerTap(downX);
-      else if (downTarget.kind === "lane") arrLaneTap(downTarget.track, downX);
-    }
-    pts.delete(e.pointerId);
-    if (pts.size === 0) mode = "idle";
-    else if (pts.size === 1) { // dropped from a pinch to one finger — carry on as a pan
-      const [id] = [...pts.keys()];
-      downId = id; downX = pts.get(id); downScroll = scroll.scrollLeft; moved = true; mode = "pan";
-    }
+  const endPinch = (e) => {
+    if (!pinching || e.touches.length >= 2) return;
+    pinching = false;
+    ppb = Math.max(ARR_MIN_PPB, Math.min(ARR_MAX_PPB, startPpb * lastScale));
+    renderArrangement(); // real layout at the new ppb; the transform dies with the old content
+    const max = Math.max(0, scroll.scrollWidth - scroll.clientWidth);
+    scroll.scrollLeft = Math.max(0, Math.min(max, focalPx * lastScale - lastMid));
   };
-  scroll.addEventListener("pointerup", up);
-  scroll.addEventListener("pointercancel", up);
+  scroll.addEventListener("touchend", endPinch);
+  scroll.addEventListener("touchcancel", endPinch);
+
+  // Tap to drop a clip / move the playhead, without stealing the scroll: track
+  // one pointer, and only act if it neither moved past the slop nor pinched.
+  let tapId = -1, tapX = 0, tapY = 0, tapTarget = null, tapMoved = false;
+  scroll.addEventListener("pointerdown", (e) => {
+    if (pinching) return;
+    tapId = e.pointerId; tapX = e.clientX; tapY = e.clientY; tapMoved = false;
+    tapTarget = e.target.closest(".arr-ruler") ? { kind: "ruler" }
+      : e.target.closest(".arr-lane") ? { kind: "lane", track: e.target.closest(".arr-lane").dataset.track }
+      : null;
+  });
+  scroll.addEventListener("pointermove", (e) => {
+    if (e.pointerId === tapId && Math.hypot(e.clientX - tapX, e.clientY - tapY) > ARR_TAP_SLOP) tapMoved = true;
+  });
+  const clearTap = () => { tapId = -1; tapTarget = null; };
+  scroll.addEventListener("pointerup", (e) => {
+    if (e.pointerId === tapId && !tapMoved && !pinching && tapTarget) {
+      if (tapTarget.kind === "ruler") arrRulerTap(tapX);
+      else arrLaneTap(tapTarget.track, tapX);
+    }
+    clearTap();
+  });
+  scroll.addEventListener("pointercancel", clearTap);
 }
 
 // ---------------------------------------------------------------------------

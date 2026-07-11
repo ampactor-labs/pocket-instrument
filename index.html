@@ -882,9 +882,10 @@
         overflow-y: hidden;
         position: relative;
         -webkit-overflow-scrolling: touch;
-        /* attachArrGestures owns panning and pinch-zoom, so keep the browser's
-           own touch scrolling out of the way — otherwise it eats the gesture. */
-        touch-action: none;
+        /* One finger pans on the browser's own inertial scroll — the timeline
+           flicks with momentum. attachArrGestures only borrows the two-finger
+           pinch (Touch events + preventDefault), so pan-x, not none. */
+        touch-action: pan-x;
       }
       .arr-content {
         position: relative;
