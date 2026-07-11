@@ -378,11 +378,28 @@ try {
   await page.waitForFunction(() => document.querySelector(".exp-status")?.textContent.includes("Kept on this device"));
   await page.evaluate(() => document.querySelector('[data-action="export-master-wav"]').click());
   try {
-    await page.waitForFunction(() => document.querySelector(".exp-status")?.textContent.includes("Master exported"), { timeout: exportTimeout });
+    await page.waitForFunction(() => document.querySelector(".exp-links a.save")?.getAttribute("href")?.startsWith("blob:"), { timeout: exportTimeout });
   } catch (e) {
     const status = await page.$eval(".exp-status", (el) => el.textContent);
     throw new Error(`export timed out; status="${status}"; errors=${errors.join(" | ") || "none"}`);
   }
+  // The status text is not enough — a silent or truncated WAV would still say
+  // "ready". Fetch the offered blob and assert it carries real audio.
+  const wav = await page.evaluate(async () => {
+    const a = document.querySelector(".exp-links a.save");
+    const buf = await fetch(a.href).then((r) => r.arrayBuffer());
+    const dv = new DataView(buf);
+    const tag = String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3));
+    let peak = 0, nz = 0, n = 0;
+    for (let off = 44; off + 2 <= buf.byteLength; off += 2) {
+      const s = dv.getInt16(off, true) / 32768, ab = Math.abs(s);
+      if (ab > peak) peak = ab;
+      if (s !== 0) nz++;
+      n++;
+    }
+    return { bytes: buf.byteLength, tag, peakDb: Math.round(20 * Math.log10(Math.max(peak, 1e-9)) * 10) / 10, nzPct: Math.round((nz / n) * 100) };
+  });
+  assertState(wav.tag === "RIFF" && wav.bytes > 100000 && wav.peakDb > -6 && wav.nzPct > 50, `exported WAV empty/silent: ${JSON.stringify(wav)}`);
   await page.screenshot({ path: exportShotPath, fullPage: true });
   await closeSheet(page);
   await page.waitForFunction(() => !document.querySelector("#sheet")?.classList.contains("open"));

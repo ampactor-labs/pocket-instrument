@@ -2932,25 +2932,47 @@ let exporting = false;
 function openExport() {
   resetSheet("#e8b84b");
   const status = el("div", { class: "exp-status", text: "" });
+  const links = el("div", { class: "exp-links" });
   const fileInput = el("input", { class: "project-file", type: "file", accept: ".noodles,application/json" });
   fileInput.addEventListener("change", () => loadProjectFile(fileInput.files?.[0], status));
+
+  // A WAV render runs for several seconds; on a phone that outlives the tap's
+  // transient activation, so a script-triggered download after the await is
+  // silently blocked \u2014 the status said "exported" but no file ever landed.
+  // Hand the finished file back as a button the user taps: a fresh gesture
+  // that downloads, or opens the native share sheet, reliably.
+  function offerSave(blob, name, label) {
+    const url = URL.createObjectURL(blob);
+    const a = el("a", { class: "exp-btn save", href: url, download: name, text: `\u2913  ${label}` });
+    a.addEventListener("click", async (e) => {
+      try {
+        const file = new File([blob], name, { type: "audio/wav" });
+        if (navigator.canShare?.({ files: [file] })) {
+          e.preventDefault();
+          await navigator.share({ files: [file], title: name });
+        }
+      } catch { /* share dismissed or unsupported \u2014 the download attribute stands in */ }
+    });
+    links.appendChild(a);
+  }
 
   async function doExport(mode) {
     if (exporting) return;
     exporting = true;
+    links.innerHTML = "";
     status.textContent = mode === "master" ? "Rendering master\u2026" : "Rendering stems\u2026";
     try {
       if (mode === "master") {
         const buf = await audio.renderOffline(null);
-        downloadBlob(encodeWav(buf), "noodles-master.wav");
-        status.textContent = "Master exported \u2713";
+        offerSave(encodeWav(buf), "noodles-master.wav", "Save master WAV");
+        status.textContent = "Master ready \u2014 tap to save:";
       } else {
         for (const t of TRACKS) {
           status.textContent = `Rendering ${t.name}\u2026`;
           const buf = await audio.renderOffline(t.key);
-          downloadBlob(encodeWav(buf), `noodles-${t.key}.wav`);
+          offerSave(encodeWav(buf), `noodles-${t.key}.wav`, `Save ${t.name} stem`);
         }
-        status.textContent = "4 stems exported \u2713";
+        status.textContent = "Stems ready \u2014 tap to save:";
       }
     } catch (e) {
       status.textContent = "Export failed: " + e.message;
@@ -2981,6 +3003,7 @@ function openExport() {
     ])
   );
   sheet.appendChild(status);
+  sheet.appendChild(links);
   openSheet();
 }
 
