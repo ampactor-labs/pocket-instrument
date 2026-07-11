@@ -320,13 +320,24 @@ function bassVelocityBoost(preset, midi) {
 function buildGraph({ meters = false } = {}) {
   const g = {};
 
-  // Master chain: gain → gentle saturation → soft clip → glue comp → makeup →
-  // soft-knee ceiling → brickwall. The maximizer-style ceiling (DECISIONS D7):
-  // kick transients used to overshoot the limiter by up to +10 dB and hard-
-  // clip at the DAC; now anything past the -4.4 dBFS knee saturates smoothly
-  // into a 0.98 ceiling instead — transparent below the knee, warm crack
-  // above it. The 0.25 pre-scale maps ±4 of true amplitude into the shaper's
-  // ±1 domain so overshoots land on the curve, not its clamped endpoints.
+  // Master chain: gain → low shelf → saturation → soft clip → glue comp →
+  // makeup → soft-knee ceiling → brickwall. The goal is translation: shine on a
+  // phone AND on big Bluetooth speakers, without tuning for either at the
+  // other's expense. Two things carry the low end so it reads on both. The
+  // shelf adds a moderate +2 dB around 100 Hz — real weight for speakers that
+  // move air, but short of the boom that overwhelms a sub or muddies a laptop.
+  // And it sits BEFORE the saturation on purpose: the drive turns that low end
+  // into harmonics up at 120/180/240 Hz, so a small speaker that can't
+  // reproduce the fundamental still hears the bass implied. Same low end, heard
+  // two ways — not a big-rig boost the phone pays for.
+  // The glue at 3:1 is a bus glue, not a squash — it moves the mix as one and
+  // leaves crest for the kick to punch through. The maximizer-style ceiling
+  // (DECISIONS D7): kick transients used to overshoot the limiter by up to
+  // +10 dB and hard-clip at the DAC; now anything past the -4.4 dBFS knee
+  // saturates smoothly into a 0.98 ceiling instead — transparent below the
+  // knee, warm crack above it. The 0.25 pre-scale maps ±4 of true amplitude
+  // into the shaper's ±1 domain so overshoots land on the curve, not its
+  // clamped endpoints.
   g.masterLimiter = new Tone.Limiter(-2).toDestination();
   const CEIL = 0.98;
   const KNEE = 0.6;
@@ -338,11 +349,12 @@ function buildGraph({ meters = false } = {}) {
   }, 4096).connect(g.masterLimiter);
   g.ceilingScale = new Tone.Gain(0.25).connect(g.ceiling);
   g.makeupGain = new Tone.Gain(Tone.dbToGain(8)).connect(g.ceilingScale);
-  g.glue = new Tone.Compressor({ threshold: -20, ratio: 4, attack: 0.03, release: 0.25, knee: 12 }).connect(g.makeupGain);
+  g.glue = new Tone.Compressor({ threshold: -20, ratio: 3, attack: 0.03, release: 0.25, knee: 12 }).connect(g.makeupGain);
   g.softClip = new Tone.WaveShaper((x) => Math.tanh(x * 1.2) / Math.tanh(1.2), 2048).connect(g.glue);
-  g.saturation = new Tone.Distortion(0.08).connect(g.softClip);
-  g.saturation.wet.value = 0.32;
-  g.master = new Tone.Gain(Tone.dbToGain(-3)).connect(g.saturation);
+  g.saturation = new Tone.Distortion(0.14).connect(g.softClip);
+  g.saturation.wet.value = 0.42;
+  g.lowShelf = new Tone.Filter({ type: "lowshelf", frequency: 100, gain: 2 }).connect(g.saturation);
+  g.master = new Tone.Gain(Tone.dbToGain(-2.5)).connect(g.lowShelf);
 
   // Sends. Algorithmic (Freeverb) instead of convolution — far cheaper per
   // sample on a low-end mobile CPU, and fine for a send reverb. The highpass
