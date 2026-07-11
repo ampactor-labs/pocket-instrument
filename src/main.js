@@ -359,7 +359,7 @@ function openAboutSheet() {
     p("Mix opens the mixer. The fader is the meter: drag the handle to set level, the body glows with loudness, the bright bar is the peak, the tick holds the recent maximum. Verb and echo are sends into a shared room, off by default — turn a knob up to send a track into it."),
 
     label("arrange"),
-    p("View flips to the timeline. Drag clips around, pull a right edge to resize, sweep the strip under the bar numbers to set a loop — tap the loop to switch it on and off. Arm ● in the top bar while you jam scenes and the performance writes itself into the timeline."),
+    p("View flips to the timeline. Drag clips around, pull a right edge to resize, sweep the strip under the bar numbers to set a loop — tap the loop to switch it on and off. Arm ● in the top bar while you jam: scene changes and your mute moves both write into the timeline, and the hatched bars play silent everywhere, exports included."),
 
     label("keep it"),
     p("File saves the project to a file or keeps it on this device, and exports a WAV — master or four stems — through the exact chain you're hearing. Mic recordings last until the tab closes; save the project to keep everything else."),
@@ -2440,6 +2440,18 @@ function renderArrangement() {
       style: `--tc:${meta.color}`,
     });
     song.arrangement[t].forEach((clip, idx) => lane.appendChild(buildArrClip(t, idx, clip, meta.color)));
+    // Recorded performance mutes, shaded as runs over the lane (painted after
+    // the clips, so the silence reads on top of whatever it silences).
+    const ml = song.mutes?.[t];
+    if (ml) {
+      for (let b = 0; b < totalBars; b++) {
+        if (!ml[b]) continue;
+        let end = b + 1;
+        while (end < totalBars && ml[end]) end++;
+        lane.appendChild(el("div", { class: "arr-mute", style: `left:${b * ppb}px; width:${(end - b) * ppb}px` }));
+        b = end - 1;
+      }
+    }
     content.appendChild(lane);
   });
 
@@ -2940,6 +2952,8 @@ function applyProject(rawProject) {
   for (const t of TRACKS) if (!Array.isArray(nextSong.arrangement[t.key])) nextSong.arrangement[t.key] = [];
   if (!nextSong.loop) nextSong.loop = { on: false, start: 0, len: 4 };
   if (!nextSong.trackSwing || typeof nextSong.trackSwing !== "object") nextSong.trackSwing = {};
+  if (!nextSong.mutes || typeof nextSong.mutes !== "object") nextSong.mutes = {};
+  for (const t of TRACKS) if (nextSong.mutes[t.key] && !Array.isArray(nextSong.mutes[t.key])) nextSong.mutes[t.key] = [];
   if (!Number.isFinite(Number(nextSong.tempo))) nextSong.tempo = 92;
   if (!Number.isFinite(Number(nextSong.key))) nextSong.key = 0;
   if (!nextSong.scale) nextSong.scale = "major";
@@ -3142,6 +3156,11 @@ audio.onVisual((e) => {
       for (const track of ARRANGE_TRACKS) {
         const sceneIdx = e.activeScenes[track];
         const trackArr = song.arrangement[track];
+
+        // The mute performance is part of the take: write this bar's effective
+        // audibility (mute OR un-soloed) into the track's mute lane, quantized
+        // to the bar like scene launches. Re-recording a section overwrites it.
+        ((song.mutes ||= {})[track] ||= [])[arrPlayBar] = trackMutedByState(track) ? 1 : 0;
 
         // Truncate or remove existing clips that overlap the current arrPlayBar
         for (let i = trackArr.length - 1; i >= 0; i--) {

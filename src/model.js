@@ -386,6 +386,10 @@ export function makeSong() {
       bass: [{ scene: 0, start: 0, len }],
       melody: [{ scene: 0, start: 0, len }],
     },
+    // Performance mutes: per track, 1 at bar index b silences that track's bar
+    // in arrangement playback and every export. Written bar-quantized by
+    // session record — M/S moves during a take are part of the performance.
+    mutes: {},
     loop: { on: false, start: 0, len: 4 },
     swing: 0.16, // global groove (16th-note swing amount)
   };

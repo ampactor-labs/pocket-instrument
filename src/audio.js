@@ -791,8 +791,14 @@ function applyMotionOn(g, patchesRef, mstate, track, scene, step, time) {
 
 // One arrangement step — shared by the live transport and the offline render.
 // Returns the chord index when a new bar triggered one (for the UI), else null.
+// Recorded performance mutes gate note scheduling per bar (tails from earlier
+// bars still ring out — a bar-quantized stop, not a hard channel gate), and
+// because this function is the single playback path, live arrangement, master,
+// stems, and loop exports all replay the same mute performance.
 function playArrangementStepOn(g, patches, vstate, song, bar, stepInBar, time) {
+  const gated = (trk) => song.mutes?.[trk]?.[bar];
   for (const trk of TRACK_KEYS) {
+    if (gated(trk)) continue;
     const c = clipAt(song, trk, bar);
     if (!c) continue;
     const sc = song.scenes[c.scene];
@@ -803,7 +809,7 @@ function playArrangementStepOn(g, patches, vstate, song, bar, stepInBar, time) {
     applyMotionOn(g, patches, vstate, trk, sc, absStep, time);
   }
   let chord = null;
-  if (stepInBar === 0) {
+  if (stepInBar === 0 && !gated("harmony")) {
     const h = clipAt(song, "harmony", bar);
     if (h) {
       const sc = song.scenes[h.scene];
@@ -813,7 +819,7 @@ function playArrangementStepOn(g, patches, vstate, song, bar, stepInBar, time) {
       }
     }
   }
-  const d = clipAt(song, "drums", bar);
+  const d = gated("drums") ? null : clipAt(song, "drums", bar);
   if (d) {
     const sc = song.scenes[d.scene];
     const idx = ((bar - d.start) * 16 + stepInBar) % stepsFor(sc, "drums");
@@ -821,6 +827,7 @@ function playArrangementStepOn(g, patches, vstate, song, bar, stepInBar, time) {
     for (const v of DRUM_VOICES) if (sc.drums[v][idx] > 0) hitDrumOn(g, patches, v, at, sc.drums[v][idx]);
   }
   for (const trk of ["bass", "melody"]) {
+    if (gated(trk)) continue;
     const c = clipAt(song, trk, bar);
     if (!c) continue;
     const sc = song.scenes[c.scene];

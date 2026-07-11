@@ -152,7 +152,8 @@ a key/scale change or an undo (and re-applies `setScaleContext`).
 Session clip grid with quantized launch, per-clip launch modes (loop/one-shot) and
 follow-actions; Arrangement timeline with drag-move, edge-resize, split, duplicate, delete,
 cross-track drag, a loop brace, and a gliding playhead; session-record (arm ● and your
-scene launches get written into the arrangement bar by bar); four clip editors, each with a
+scene launches AND your M/S mute moves get written into the arrangement bar by bar — the
+hatched bars replay silent in playback and every export); four clip editors, each with a
 velocity lane; vertical mixer strips (fader, pan, reverb + echo sends, live meters with peak
 hold, preset pickers); loudness-matched device presets per track; randomized-but-balanced
 cold open (key, scale, tempo, presets, magic scene) plus a 🎲 button that rerolls it all;
