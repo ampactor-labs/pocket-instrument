@@ -2973,9 +2973,13 @@ function openExport() {
     if (exporting) return;
     exporting = true;
     links.innerHTML = "";
-    status.textContent = mode === "master" ? "Rendering master\u2026" : "Rendering stems\u2026";
+    status.textContent = mode === "loop" ? "Rendering loop\u2026" : mode === "master" ? "Rendering master\u2026" : "Rendering stems\u2026";
     try {
-      if (mode === "master") {
+      if (mode === "loop") {
+        const buf = await audio.renderOffline(null, { loop: { start: song.loop.start, len: song.loop.len } });
+        offerSave(encodeWav(buf), "noodles-loop.wav", `Save loop \u00b7 ${song.loop.len} ${song.loop.len === 1 ? "bar" : "bars"}`);
+        status.textContent = "Seamless loop ready \u2014 tap to save:";
+      } else if (mode === "master") {
         const buf = await audio.renderOffline(null);
         offerSave(encodeWav(buf), "noodles-master.wav", "Save master WAV");
         status.textContent = "Master ready \u2014 tap to save:";
@@ -3006,15 +3010,22 @@ function openExport() {
       fileInput,
     ])
   );
-  sheet.appendChild(
-    el("div", { class: "propsection" }, [
-      el("div", { class: "proplabel", text: "audio" }),
-      el("div", { class: "exp-grid" }, [
-        el("div", { class: "exp-btn", text: "\uD83C\uDFB5  Master WAV", "data-action": "export-master-wav", onclick: () => doExport("master") }),
-        el("div", { class: "exp-btn", text: "\uD83C\uDFDA  Stems (4\u00d7)", "data-action": "export-stems", onclick: () => doExport("stems") }),
-      ]),
-    ])
-  );
+  // Loop-first: when a loop is set on the arrangement, it IS the backing track
+  // \u2014 the primary thing you render. The full song and stems sit below it.
+  const audioSection = [el("div", { class: "proplabel", text: "audio" })];
+  if (song.loop?.on && song.loop.len >= 1) {
+    audioSection.push(el("div", {
+      class: "exp-btn loop-primary",
+      text: `\uD83D\uDD01  Export loop \u00B7 ${song.loop.len} ${song.loop.len === 1 ? "bar" : "bars"}`,
+      "data-action": "export-loop",
+      onclick: () => doExport("loop"),
+    }));
+  }
+  audioSection.push(el("div", { class: "exp-grid" }, [
+    el("div", { class: "exp-btn", text: "\uD83C\uDFB5  Master WAV", "data-action": "export-master-wav", onclick: () => doExport("master") }),
+    el("div", { class: "exp-btn", text: "\uD83C\uDFDA  Stems (4\u00d7)", "data-action": "export-stems", onclick: () => doExport("stems") }),
+  ]));
+  sheet.appendChild(el("div", { class: "propsection" }, audioSection));
   sheet.appendChild(status);
   sheet.appendChild(links);
   openSheet();

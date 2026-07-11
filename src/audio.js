@@ -61,6 +61,18 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // The send knobs sweep -30..0 dB; the bottom of the range is "off".
 const sendGain = (db) => (db <= -29 ? 0 : Tone.dbToGain(db));
 
+// Cut [startSec, endSec) out of a rendered buffer into a fresh AudioBuffer —
+// used to keep the second cycle of a seamless loop render.
+function sliceBuffer(buf, startSec, endSec) {
+  const sr = buf.sampleRate;
+  const ch = buf.numberOfChannels;
+  const start = Math.max(0, Math.floor(startSec * sr));
+  const end = Math.min(buf.length, Math.floor(endSec * sr));
+  const out = new AudioBuffer({ length: Math.max(1, end - start), numberOfChannels: ch, sampleRate: sr });
+  for (let c = 0; c < ch; c++) out.copyToChannel(buf.getChannelData(c).subarray(start, end), c);
+  return out;
+}
+
 function scheduleKickDuck(param, time) {
   param.cancelScheduledValues(time);
   param.setValueAtTime(1, time);
@@ -1393,34 +1405,50 @@ export function createAudio(song) {
       visualCb = cb;
     },
     // --- offline WAV render: the same buildGraph as live, driven linearly ---
-    async renderOffline(soloTrack) {
-      const totalBars = arrangeLength(song);
+    // Render through the real graph. Default: the whole arrangement, one pass,
+    // with a tail. opts.loop = {start, len} instead renders a SEAMLESS loop of
+    // the region — two cycles back to back, keeping the second, so the first
+    // pass's reverb/echo/release tail bleeds into the second's downbeat and the
+    // file wraps into itself with no click when a looper repeats it.
+    async renderOffline(soloTrack, opts = {}) {
       const barSec = 240 / song.tempo;
-      const dur = totalBars * barSec + 2;
-      const patchesCopy = structuredClone(patches);
-      const buffer = await Tone.Offline(({ transport: offTr }) => {
-        offTr.bpm.value = song.tempo;
-        const g = buildGraph({ meters: false });
-        for (const t of TRACK_KEYS) applyPatchTo(g, t, patchesCopy[t]);
-        const anySolo = TRACK_KEYS.some((track) => channelState[track].solo);
-        for (const k of TRACK_KEYS) {
-          const st = channelState[k];
-          const muted = soloTrack ? k !== soloTrack : st.mute || (anySolo && !st.solo);
-          g.channels[k].set({ volume: muted ? -Infinity : st.vol, pan: st.pan, mute: muted });
-          g.verbSends[k].gain.value = sendGain(st.verb);
-          g.echoSends[k].gain.value = sendGain(st.echo);
-        }
-        const vstate = { prev: null };
-        let step = 0;
-        new Tone.Loop((time) => {
-          const bar = Math.floor(step / 16);
-          if (bar >= totalBars) return;
-          playArrangementStepOn(g, patchesCopy, vstate, song, bar, step % 16, time);
-          step += 1;
-        }, "16n").start(0);
-        offTr.start(0);
-      }, dur);
-      return buffer;
+      const runPass = (dur, stopStep, barOf) => {
+        const patchesCopy = structuredClone(patches);
+        return Tone.Offline(({ transport: offTr }) => {
+          offTr.bpm.value = song.tempo;
+          const g = buildGraph({ meters: false });
+          for (const t of TRACK_KEYS) applyPatchTo(g, t, patchesCopy[t]);
+          const anySolo = TRACK_KEYS.some((track) => channelState[track].solo);
+          for (const k of TRACK_KEYS) {
+            const st = channelState[k];
+            const muted = soloTrack ? k !== soloTrack : st.mute || (anySolo && !st.solo);
+            g.channels[k].set({ volume: muted ? -Infinity : st.vol, pan: st.pan, mute: muted });
+            g.verbSends[k].gain.value = sendGain(st.verb);
+            g.echoSends[k].gain.value = sendGain(st.echo);
+          }
+          const vstate = { prev: null };
+          let step = 0;
+          new Tone.Loop((time) => {
+            if (step >= stopStep) return;
+            playArrangementStepOn(g, patchesCopy, vstate, song, barOf(step), step % 16, time);
+            step += 1;
+          }, "16n").start(0);
+          offTr.start(0);
+        }, dur);
+      };
+
+      const loop = opts.loop && opts.loop.len >= 1 ? opts.loop : null;
+      if (loop) {
+        const ls = Math.max(0, Math.floor(loop.start));
+        const ll = Math.max(1, Math.floor(loop.len));
+        const cycleSec = ll * barSec;
+        // Two cycles plus a tail to discard; keep the second cycle only.
+        const buf = await runPass(2 * cycleSec + Math.min(2, cycleSec), 2 * ll * 16, (s) => ls + (Math.floor(s / 16) % ll));
+        return sliceBuffer(buf, cycleSec, 2 * cycleSec);
+      }
+
+      const totalBars = arrangeLength(song);
+      return runPass(totalBars * barSec + 2, totalBars * 16, (s) => Math.floor(s / 16));
     },
   };
 }
