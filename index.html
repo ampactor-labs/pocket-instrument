@@ -74,13 +74,16 @@
         color: var(--dim);
         pointer-events: none;
       }
+      /* One bar, no segment walls: the old divider borders penned the BPM
+         into a middle cell that is NARROWER than the BPM's minimum width on
+         a 360px phone — the box spilled under the walls and the dividers
+         sliced through it. */
       .tleft {
         flex: 0 0 auto;
         display: flex;
         align-items: center;
         gap: 7px;
         padding: 0 10px;
-        border-right: 1px solid #000;
       }
       .ttempo {
         flex: 1;
@@ -96,7 +99,6 @@
         display: flex;
         align-items: center;
         padding: 0 10px;
-        border-left: 1px solid #000;
       }
       .tbtn {
         flex: 0 0 auto;
@@ -130,6 +132,35 @@
       #bpm.dragging {
         background: #3a3a40;
         color: #fff;
+      }
+      /* Compact steps where the full bar cannot fit — these live AFTER the
+         base #bpm rule or its min-width wins the cascade and the box spills
+         under its neighbors again (A16 class = 360px, worst case 320). */
+      @media (max-width: 400px) {
+        .tleft,
+        .tright {
+          gap: 5px;
+          padding: 0 7px;
+        }
+        .tbtn {
+          padding: 0 8px;
+        }
+        #bpm {
+          min-width: 64px;
+          padding: 8px 6px;
+          font-size: 14px;
+        }
+      }
+      @media (max-width: 340px) {
+        .tleft,
+        .tright {
+          gap: 4px;
+          padding: 0 5px;
+        }
+        .tbtn {
+          min-width: 30px;
+          padding: 0 6px;
+        }
       }
       .swingctl {
         display: flex;
@@ -1519,7 +1550,7 @@
       /* ?perf diagnostics overlay */
       #perf-hud {
         position: fixed;
-        top: 4px;
+        bottom: calc(6px + env(safe-area-inset-bottom, 0px));
         left: 50%;
         transform: translateX(-50%);
         z-index: 999;
