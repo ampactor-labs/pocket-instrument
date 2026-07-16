@@ -40,6 +40,18 @@ Kick transients were overshooting the limiter by up to +10 dB and hard-clipping 
 
 Ableton-style warp is phase-vocoder stretching — heavy for the target phone, and worklets render silent inside Tone.Offline, which would break export-matches-app (the BitCrusher lesson). What made warp-era sample work joyful was mostly chopping against the grid, reordering, and repitching — and that maps to a noodles-native **chop deck**: load a WAV, auto-slice at transients or grid divisions, slices land on pads and sequence on the same 16 steps, per-slice repitch via playbackRate (native, cheap, offline-safe). If loops-that-follow-tempo is ever needed, stretch once at import into a pre-rendered buffer rather than in realtime. Agreed order: automation first, chop deck second.
 
+## Ratified 2026-07-16
+
+### D8 — The send returns ride the kick duck
+
+The reverb and echo returns used to land on the master directly, so with a send up the wet
+tail filled the exact pocket the kick-sidechain had just carved from the dry mix — measured
+at a 2.8 dB median dip where the duck itself is -12 dB. Routing both returns through the
+duck bus restores the pump: 10.5 dB median dip on the same probe (pad solo, verb at -8,
+four-on-floor kick). This is the bass-music discipline (highpass the returns AND sidechain
+them), and it costs nothing when sends are dry, which is the default. Revertable by
+repointing two connects at `g.master`.
+
 ## Provisional (my recommendation, argue against it)
 
 ### P1 — Use case 1 leads v0; the cold-open harmony playground is the whole first milestone

@@ -24,18 +24,18 @@ import { CHORDS, DRUM_VOICES, voiceLead, clipAt, arrangeLength, clipLaunch, clip
 // Per-track swing: offbeat lane steps get delayed by up to a third of a 16th
 // (1.0 = full triplet feel). Each track reads its own amount, falling back to
 // the global groove — the transport's built-in swing is retired so drums can
-// sit in a different pocket than the bass.
+// sit in a different pocket than the bass. The 16th comes straight from
+// song.tempo: a cached transport lookup only refreshed when a melodic note
+// played, so drums-only grooves swung on the wrong tempo.
 const swingOffsetFor = (song, track, laneStep) =>
-  laneStep % 2 === 1 ? ((((song.trackSwing?.[track] ?? song.swing) || 0) * sixteenthCached()) / 3) : 0;
-let _sixteenth = 0.125;
-const sixteenthCached = () => _sixteenth;
+  laneStep % 2 === 1 ? ((((song.trackSwing?.[track] ?? song.swing) || 0) * (15 / song.tempo)) / 3) : 0;
 
 // Debug handle for the headless harnesses; lets calibrate/smoke experiments
 // build minimal Tone graphs without reaching into the bundle.
 if (typeof window !== "undefined") window.__noodlesTone = Tone;
 
 const midiToFreq = (m) => Tone.Frequency(m, "midi").toFrequency();
-const sixteenth = () => { _sixteenth = Tone.Time("16n").toSeconds(); return _sixteenth; };
+const sixteenth = () => Tone.Time("16n").toSeconds();
 
 export const TRACK_KEYS = ["harmony", "drums", "bass", "melody"];
 export const MELODIC_TRACKS = ["harmony", "bass", "melody"];
@@ -73,8 +73,10 @@ function sliceBuffer(buf, startSec, endSec) {
 }
 
 function scheduleKickDuck(param, time) {
-  param.cancelScheduledValues(time);
-  param.setValueAtTime(1, time);
+  // Hold whatever the gain is at the kick instant: resetting to 1 first put a
+  // +12 dB step on the music bus at the head of every kick — a tick on
+  // sustained pads, worst on dense patterns where the bus never fully recovers.
+  param.cancelAndHoldAtTime(time);
   param.linearRampToValueAtTime(KICK_DUCK_GAIN, time + 0.008);
   param.exponentialRampToValueAtTime(1, time + 0.25);
 }
@@ -161,6 +163,10 @@ export const SAMPLE_KIT_NAMES = ["street", "warm", "dusty", "808"];
 // Voice balance inside the sample bank (one-shots are peak-normalized, so
 // musical balance is set here, then verified by the calibrate drum stems).
 const SAMPLE_VOICE_DB = { kick: 0, snare: -2, hat: -8, clap: -5 };
+// Conditioning targets for user-recorded one-shots: the median per-voice RMS
+// of the bundled library INCLUDING each kit's trim (measured, .tmp receipt).
+// A mouth-boom lands at library loudness by construction, not by luck.
+const USER_TARGET_RMS_DB = { kick: -14, snare: -17, hat: -27, clap: -23 };
 export const DRUM_BANKS = ["sample", "synth"];
 
 const sampleBuffers = {};
@@ -198,9 +204,11 @@ const userSamples = {};
 
 // Condition a raw take into a one-shot that sits beside the bundled library:
 // find the onset, trim the room before it and the noise after it, fade the
-// edges, cap at 1.5 s, and normalize to the library's -1 dBFS peak. This is
-// the difference between "cute demo" and a mouth-boom that actually knocks.
-function conditionOneShot(audioBuf) {
+// edges, cap at 1.5 s, and normalize to the voice's library RMS target under
+// a -1 dBFS peak ceiling (peak-normalizing alone left the level hostage to
+// the take's crest factor). This is the difference between "cute demo" and a
+// mouth-boom that actually knocks.
+function conditionOneShot(voice, audioBuf) {
   const sr = audioBuf.sampleRate;
   const src = audioBuf.getChannelData(0);
   let peak = 0;
@@ -219,11 +227,15 @@ function conditionOneShot(audioBuf) {
   const out = Tone.getContext().rawContext.createBuffer(1, len, sr);
   const dst = out.getChannelData(0);
   let localPeak = 0;
+  let sumSq = 0;
   for (let i = 0; i < len; i++) {
     dst[i] = src[start + i];
     localPeak = Math.max(localPeak, Math.abs(dst[i]));
+    sumSq += dst[i] * dst[i];
   }
-  const gain = 0.891 / (localPeak || 1);
+  const rms = Math.sqrt(sumSq / len) || 1e-6;
+  const target = Math.pow(10, (USER_TARGET_RMS_DB[voice] ?? -17) / 20);
+  const gain = Math.min(target / rms, 0.891 / (localPeak || 1));
   const fadeIn = Math.floor(0.002 * sr);
   const fadeOut = Math.min(Math.floor(0.02 * sr), Math.floor(len / 4));
   for (let i = 0; i < len; i++) {
@@ -331,8 +343,9 @@ function bassVelocityBoost(preset, midi) {
 function buildGraph({ meters = false } = {}) {
   const g = {};
 
-  // Master chain: gain → low shelf → saturation → soft clip → glue comp →
-  // makeup → soft-knee ceiling → brickwall. The goal is translation: shine on a
+  // Master chain: gain → rumble HP → low shelf → saturation → soft clip →
+  // glue comp → makeup → soft-knee ceiling → brickwall. The goal is
+  // translation: shine on a
   // phone AND on big Bluetooth speakers, without tuning for either at the
   // other's expense. Two things carry the low end so it reads on both. The
   // shelf adds a moderate +2 dB around 100 Hz — real weight for speakers that
@@ -365,18 +378,12 @@ function buildGraph({ meters = false } = {}) {
   g.saturation = new Tone.Distortion(0.14).connect(g.softClip);
   g.saturation.wet.value = 0.42;
   g.lowShelf = new Tone.Filter({ type: "lowshelf", frequency: 100, gain: 2 }).connect(g.saturation);
-  g.master = new Tone.Gain(Tone.dbToGain(-2.5)).connect(g.lowShelf);
-
-  // Sends. Algorithmic (Freeverb) instead of convolution — far cheaper per
-  // sample on a low-end mobile CPU, and fine for a send reverb. The highpass
-  // on the reverb input keeps kicks and 808 subs out of the tail: reverberant
-  // low end reads as mud, not space. The echo carries the same highpass, a
-  // touch lower, so its repeats don't pile low-end into the feedback loop.
-  g.reverb = new Tone.Freeverb({ roomSize: 0.72, dampening: 2600, wet: 1 }).connect(g.master);
-  g.reverbHP = new Tone.Filter({ type: "highpass", frequency: 200, Q: 0.7 }).connect(g.reverb);
-  g.echo = new Tone.FeedbackDelay({ delayTime: "8n", feedback: 0.26, wet: 1 }).connect(g.master);
-  g.echoHP = new Tone.Filter({ type: "highpass", frequency: 160, Q: 0.7 }).connect(g.echo);
-  g.echoReturn = new Tone.Gain(Tone.dbToGain(-4)).connect(g.echoHP);
+  // Subsonic guard: the piano roll reaches C0 (16 Hz) and the bass lane HP at
+  // 34 Hz only takes ~14 dB off it — what's left rides into the limiter as
+  // headroom loss no speaker gives back. 18 Hz leaves a 30 Hz 808 fundamental
+  // essentially untouched (≈ -0.5 dB).
+  g.rumbleHP = new Tone.Filter({ type: "highpass", frequency: 18, Q: 0.7 }).connect(g.lowShelf);
+  g.master = new Tone.Gain(Tone.dbToGain(-2.5)).connect(g.rumbleHP);
 
   // Everything melodic passes through the kick-side duck; drums get a dry bus
   // plus a parallel-compressed return for weight.
@@ -386,6 +393,19 @@ function buildGraph({ meters = false } = {}) {
   g.drumParallel = new Tone.Compressor({ threshold: -24, ratio: 4.5, attack: 0.004, release: 0.13, knee: 12 });
   g.drumParallelReturn = new Tone.Gain(DRUM_PARALLEL_GAIN).connect(g.drumBus);
   g.drumParallel.connect(g.drumParallelReturn);
+
+  // Sends. Algorithmic (Freeverb) instead of convolution — far cheaper per
+  // sample on a low-end mobile CPU, and fine for a send reverb. The highpass
+  // on the reverb input keeps kicks and 808 subs out of the tail: reverberant
+  // low end reads as mud, not space. The echo carries the same highpass, a
+  // touch lower, so its repeats don't pile low-end into the feedback loop.
+  // Both returns land on the duck bus, not the master: a wet tail that skips
+  // the sidechain fills the exact pocket the kick just carved.
+  g.reverb = new Tone.Freeverb({ roomSize: 0.72, dampening: 2600, wet: 1 }).connect(g.musicDuck);
+  g.reverbHP = new Tone.Filter({ type: "highpass", frequency: 200, Q: 0.7 }).connect(g.reverb);
+  g.echo = new Tone.FeedbackDelay({ delayTime: "8n", feedback: 0.26, wet: 1 }).connect(g.musicDuck);
+  g.echoHP = new Tone.Filter({ type: "highpass", frequency: 160, Q: 0.7 }).connect(g.echo);
+  g.echoReturn = new Tone.Gain(Tone.dbToGain(-4)).connect(g.echoHP);
 
   // Mixer strips. Melodic tracks run through a per-track compressor into the
   // channel; drums hit their channel directly (the drum bus already carries
@@ -743,9 +763,13 @@ function hitDrumOn(g, patches, v, time, vel = 0.9) {
   if (v === "kick") scheduleKickDuck(g.musicDuck.gain, time);
   const patch = patches.drums;
   if (patch.bank === "sample" && samplesReady) {
-    const pinned = resolveSampleBuffer(v, patch.pins?.[v]);
+    const pin = patch.pins?.[v];
+    const pinned = resolveSampleBuffer(v, pin);
     if (pinned) {
-      playSampleHit(g, pinned, v, time, vel);
+      // A pinned one-shot keeps its kit's measured trim (user takes are
+      // conditioned to the same loudness) — pinning must never move the mix.
+      const trim = pin === "user" ? 1 : Tone.dbToGain(SAMPLE_KITS[pin.slice(0, pin.lastIndexOf("-"))]?.gain ?? 0);
+      playSampleHit(g, pinned, v, time, vel * trim);
       return;
     }
     let played = false;
@@ -957,6 +981,11 @@ export function createAudio(song) {
   // Swing is applied per trigger (swingOffsetFor), never on the transport —
   // that's what lets each track sit in its own pocket.
   transport.swing = 0;
+  // buildGraph ran before the tempo reached this transport, so the live echo's
+  // "8n" froze at Tone's 120 default (offline renders set bpm before building
+  // and never had the bug). Pin it to the real grid here and on tempo changes.
+  const syncEcho = (bpm) => live.echo.delayTime.rampTo(30 / bpm, 0.1);
+  syncEcho(song.tempo);
 
   function tickArrangement(time) {
     const len = arrangeLength(song);
@@ -1262,6 +1291,7 @@ export function createAudio(song) {
     },
     setTempo(bpm) {
       transport.bpm.rampTo(bpm, 0.1);
+      syncEcho(bpm);
       // Tempo-synced colors (trem/wob) chase the new grid.
       for (const t of TRACK_KEYS) live.colorNodes[t]?.updateColor?.(patches[t].amount, patches[t].motion);
     },
@@ -1376,7 +1406,7 @@ export function createAudio(song) {
     userSampleName: (voice) => userSamples[voice]?.name || null,
     async loadUserSample(voice, arrayBuffer, name) {
       const audioBuf = await Tone.getContext().rawContext.decodeAudioData(arrayBuffer);
-      userSamples[voice] = { buffer: new Tone.ToneAudioBuffer(conditionOneShot(audioBuf)), name };
+      userSamples[voice] = { buffer: new Tone.ToneAudioBuffer(conditionOneShot(voice, audioBuf)), name };
       return name;
     },
     // Beatbox capture: record the mic straight into a voice slot. Raw-ish
@@ -1397,7 +1427,7 @@ export function createAudio(song) {
             const raw = await new Blob(chunks).arrayBuffer();
             const audioBuf = await Tone.getContext().rawContext.decodeAudioData(raw);
             const name = `mic ${voice}`;
-            userSamples[voice] = { buffer: new Tone.ToneAudioBuffer(conditionOneShot(audioBuf)), name };
+            userSamples[voice] = { buffer: new Tone.ToneAudioBuffer(conditionOneShot(voice, audioBuf)), name };
             resolve(name);
           } catch (err) {
             reject(err);

@@ -108,9 +108,11 @@ API. The one rule that matters: **`buildGraph()` is the only place the signal ch
 The live context and `renderOffline` (WAV export) both call it, so export-matches-app holds
 by construction; never fork the chain. Topology: per track a preset **trim** Gain and
 `Tone.Channel` (drums skip the per-track input compressor; they already get parallel
-compression), reverb + echo sends, a kick-sidechain duck on everything melodic, a drum bus
-with a parallel compressor, and a master section (gain → saturation → soft clip → glue
-compressor → +8 dB makeup → limiter at -2). Harmony = saw pad (the LFO owns its filter
+compression), reverb + echo sends whose returns ride the kick-sidechain duck along with
+everything melodic (a wet tail must pump with the dry mix, not fill the pocket), a drum bus
+with a parallel compressor, and a master section (gain → 18 Hz rumble HP → +2 dB low shelf
+at 100 → saturation → soft clip → glue compressor → +8 dB makeup → soft-knee ceiling →
+limiter at -2). Harmony = saw pad (the LFO owns its filter
 cutoff, because a signal connected to a param overrides it; presets rescale the LFO range)
 + mono halo + a highpassed root hint; bass and lead are PolySynths behind drive/filters; the
 kit is MembraneSynth kick + filtered-noise snare/hat/clap. Each track's device is a
@@ -123,7 +125,8 @@ corner tables carry **measured** gain trims and the morph space inherits them. R
 `npm run calibrate` before and after changing corners, colors, or the chain; per-track
 spreads (corners AND space table) must stay ≲2.5 dB or randomizing sounds starts randomizing
 the mix. One `Tone.Loop("16n")` clock drives both Scene looping and Arrangement
-playback, emitting UI events through `Tone.Draw.schedule` → `onVisual`. Public API:
+playback, emitting UI events through the rAF visual pump (`scheduleVisual`, latency-
+compensated against the audio clock) → `onVisual`. Public API:
 `init/play/stop/playing`, `launchScene`/`launchClip`, `playArrangement`/`setArrangePos`/
 `enterArrangement`, `setTempo`/`setSwing`, `preview`/`previewHit`/`previewNote`, mixer
 `setVol`/`setPan`/`setSend`/`setEcho`/`setMute`/`setSolo`/`meter`, preset getters/setters

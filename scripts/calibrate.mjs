@@ -53,9 +53,11 @@ try {
     executablePath: chrome,
     headless: true,
     args: ["--no-sandbox", "--mute-audio"],
-    // The whole sweep runs as one page.evaluate — ~75 offline renders —
-    // which blows past the 180 s default protocol timeout.
-    protocolTimeout: 1_800_000,
+    // The whole sweep runs as one page.evaluate — ~110 offline renders
+    // (the dice section alone is 40) — which blows past the 180 s default
+    // protocol timeout, and a 30-minute cap started flaking once the sweep
+    // grew: give it an hour.
+    protocolTimeout: 3_600_000,
   });
   const page = await browser.newPage();
   const errors = [];
@@ -99,6 +101,14 @@ try {
       },
       loop: { on: false, start: 0, len: 4 },
     });
+
+    // Pin every device to a deterministic patch first: the cold open rolls
+    // random colors (and a drum bank) at page load, and the preset tables
+    // inherit whatever it rolled — a ±1-2 dB noise floor between runs that
+    // reads as regression. The space table sets its own specs; these pins
+    // make the preset tables just as controlled.
+    for (const t of ["harmony", "bass", "melody"]) audio.setPatch(t, { x: 0, y: 0, color: "none", amount: 0.5, motion: 0.5 });
+    audio.setPatch("drums", { x: 0, y: 0, color: "none", amount: 0.5, motion: 0.5, bank: "sample", pins: {} });
 
     // Stats over the musical body, not the reverb tail. `hi` is RMS through a
     // double one-pole 80 Hz highpass — a crude speaker-band meter. Flat RMS
