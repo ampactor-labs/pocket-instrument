@@ -917,7 +917,13 @@ export function createAudio(song) {
   let syncNudge = 0;
   const visualLatency = () => {
     const raw = Tone.getContext().rawContext;
-    return (raw.baseLatency || 0) + (raw.outputLatency || 0) + syncNudge;
+    const reported = (raw.baseLatency || 0) + (raw.outputLatency || 0);
+    // A zero report is a lie, not a measurement — Brave farbles the latency
+    // APIs against fingerprinting and older Android Chrome never fills
+    // outputLatency — and trusting it makes every visual lead the sound by
+    // the whole real latency. Treat zero as unknown and assume a modest
+    // floor; the sync nudge stacks on top for landing it exactly.
+    return (reported > 0.001 ? reported : 0.08) + syncNudge;
   };
   const visualQueue = [];
   let visualRAF = 0;
