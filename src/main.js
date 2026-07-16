@@ -104,8 +104,12 @@ function rolledPatch(track) {
   }
   return p;
 }
-function randomizePresets() {
+function randomizePresets(vibe) {
   for (const t of ["harmony", "bass", "melody", "drums"]) audio.setPatch(t, rolledPatch(t));
+  // The kit hire was rolled inside the vibe (an 808 halftime and a garage
+  // 2-step read as THINGS; a null hire keeps the surprise). setKit moves
+  // bank + corner and leaves the rolled color/motion alone.
+  if (vibe?.kit) audio.setKit(vibe.kit);
 }
 // The dice must never deal dead air: "deep" is a driveless sine, and a sine
 // in octave 1 (~33 Hz fundamental, no harmonics) is inaudible on phone and
@@ -120,8 +124,8 @@ function fitBassRegister(scene) {
   }
   return scene;
 }
-randomizePresets();
-fitBassRegister(song.scenes[0]);
+randomizePresets(song.vibe);
+for (const sc of song.scenes) fitBassRegister(sc);
 const PROJECT_SCHEMA = "noodles-project";
 const PROJECT_VERSION = 2; // v2: devices carry full patch specs, not just preset names
 const LOCAL_PROJECT_KEY = "noodles:last-project";
@@ -463,7 +467,7 @@ function openAddSceneSheet() {
     el("div", { class: "tfrow" }, [
       el("div", { class: "tfbtn", text: "Blank", onclick: () => addScene(emptyScene()) }),
       el("div", { class: "tfbtn", text: "Duplicate Current", onclick: () => addScene(cloneScene(song.scenes[baseIndex])) }),
-      el("div", { class: "tfbtn accent", text: "Magic", onclick: () => addScene(fitBassRegister(makeMagicScene())) }),
+      el("div", { class: "tfbtn accent", text: "Magic", onclick: () => addScene(fitBassRegister(makeMagicScene(song.vibe))) }),
     ])
   );
   openSheet();
@@ -604,8 +608,9 @@ function rerollSong() {
   const fresh = makeSong();
   for (const key of Object.keys(song)) delete song[key];
   Object.assign(song, fresh);
-  randomizePresets();
-  fitBassRegister(song.scenes[0]);
+  randomizePresets(song.vibe);
+  for (const sc of song.scenes) fitBassRegister(sc);
+  applyVibeMix(song.vibe); // refreshAll below pushes tempo/swing to the engine
   selClip = null;
   arrPlayBar = 0;
   playingScene = -1;
@@ -1290,6 +1295,21 @@ function applyTrackMix(track) {
 function applyMixState() {
   for (const t of TRACKS) applyTrackMix(t.key);
   updateTrackMixUI();
+}
+
+// The dice owns the sends (DECISIONS D9): a wet roll sets them, a dry roll
+// clears them back to default — otherwise wetness would accumulate across
+// rolls. Faders, pan, and mutes stay the player's. vibe.wet is keyed by
+// track and send, so the routing discipline (what gets wet at all) has one
+// home in rollVibe and this stays a plain merge. Engine-push only: both
+// callers repaint the full UI right after, so no updateTrackMixUI here.
+function applyVibeMix(vibe) {
+  for (const t of TRACKS) {
+    for (const send of ["verb", "echo"]) {
+      mixState[t.key][send] = vibe?.wet?.[t.key]?.[send] ?? MIX_DEFAULTS[t.key][send];
+    }
+    applyTrackMix(t.key);
+  }
 }
 
 function resetTrackMix(track, { sendsOnly = false } = {}) {
@@ -3332,7 +3352,7 @@ audio.onVisual((e) => {
   }
 });
 
-applyMixState();
+applyVibeMix(song.vibe); // the cold open's roll includes its space
 renderTransport();
 renderSession();
 

@@ -506,7 +506,8 @@ try {
     scenes: window.__noodles.song.scenes.length,
     tag: window.__noodles.song.scenes[0].tag,
   }));
-  assertState(afterDice.scenes === 1 && afterDice.tag.includes("✨"), `dice did not roll a fresh magic song: ${JSON.stringify(afterDice)}`);
+  // A roll is one magic scene, sometimes with a ✨b variation to go to.
+  assertState(afterDice.scenes >= 1 && afterDice.scenes <= 2 && afterDice.tag.includes("✨"), `dice did not roll a fresh magic song: ${JSON.stringify(afterDice)}`);
   await page.evaluate(() => document.querySelector(".tbtn.undo").click());
   const scenesAfterUndo = await page.evaluate(() => window.__noodles.song.scenes.length);
   assertState(scenesAfterUndo === scenesBeforeDice, `undo did not restore the pre-dice song (${scenesAfterUndo} vs ${scenesBeforeDice})`);

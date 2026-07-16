@@ -52,6 +52,23 @@ four-on-floor kick). This is the bass-music discipline (highpass the returns AND
 them), and it costs nothing when sends are dry, which is the default. Revertable by
 repointing two connects at `g.master`.
 
+### D9 — The dice rolls archetypes, and it owns the sends
+
+The global 🎲 used to roll wide timbre over one pattern archetype — same drummer, same
+bass player, dry room, every roll. Now a **vibe** is rolled once per song: a groove
+archetype (four-floor / backbeat / halftime / 2-step / minimal, each with its own kick
+placement, hat grid, velocity personality, tempo band, and pocket range), weighted bass
+behaviors, a melody built as a repeated-and-varied motif instead of uniform scatter,
+weighted harmony families with rolled length (1/2/4 bars), and spice at low rates
+(harmonyOct ±1 at 15%, a 12-step polymeter lane at 10%, a ✨b variation scene at 60% so a
+good roll has somewhere to go). The groove hires the kit 60% of the time (808 → halftime,
+garage → 2-step). About a third of rolls arrive **wet** — verb on pad and lead, echo on
+lead, never bass/drums — which crosses into mix state: the builder called this fork, and
+the contract is that the dice owns the *sends* (a dry roll resets them) while faders, pan,
+and mutes stay the player's. Wet rolls are safe because the returns are highpassed and
+ride the kick duck (D8). The design lesson applied: selection beats processing — roll
+from curated archetypes with noise inside, not uniform noise over everything.
+
 ## Provisional (my recommendation, argue against it)
 
 ### P1 — Use case 1 leads v0; the cold-open harmony playground is the whole first milestone

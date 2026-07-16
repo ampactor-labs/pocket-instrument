@@ -228,74 +228,300 @@ export function defaultScene() {
   return makeMagicScene();
 }
 
-export function makeMagicScene() {
-  const dens = { kick: 0.32, snare: 0.14, hat: 0.5, clap: 0.12 };
-  const drums = {};
-  for (const v of DRUM_VOICES) {
-    drums[v] = new Array(16).fill(0);
-    for (let s = 0; s < 16; s++) {
-      if (v === "kick" && s % 2 !== 0 && Math.random() > 0.1) continue;
-      if (v === "snare" && s % 4 !== 0) continue;
-      if (Math.random() >= dens[v]) continue;
-      // Velocity shapes the groove: offbeat hats accented, everything else a
-      // touch under the anchors so the backbone stays in front.
-      if (v === "hat") drums[v][s] = (s % 4 === 2 ? 0.85 : 0.55) + Math.random() * 0.15;
-      else drums[v][s] = 0.6 + Math.random() * 0.25;
-    }
+// --- The vibe: one coherent roll of groove, tempo, pocket, space, and spice.
+// The dice used to roll uniform noise over one pattern archetype — the same
+// band playing every song. Now it hires from archetypes (selection beats
+// processing) and the noise lives INSIDE the archetype, so a roll grooves
+// like a thing without playing the same thing twice.
+const rnd = Math.random;
+const rint = (lo, hi) => lo + Math.floor(rnd() * (hi - lo + 1));
+const pickFrom = (arr) => arr[(rnd() * arr.length) | 0];
+const dlane = (fill) => Array.from({ length: 16 }, (_, s) => fill(s) || 0);
+function pickW(pairs) {
+  let total = 0;
+  for (const [, w] of pairs) total += w;
+  let r = rnd() * total;
+  for (const [v, w] of pairs) {
+    r -= w;
+    if (r <= 0) return v;
   }
-  drums.kick[0] = 0.95;
-  drums.kick[8] = 0.9;
-  drums.snare[4] = 0.9;
-  drums.snare[12] = 0.9;
+  return pairs[pairs.length - 1][0];
+}
 
-  const harmony = Array.from({ length: 4 }, () => Math.floor(Math.random() * 7));
+// Groove archetypes: the drummer the dice hires. Each carries its roll
+// weight, kick placement, hat grid, velocity personality, tempo band, pocket
+// range, bass behavior weights, a melody-density hint, and the kits it likes
+// to play. A voice an archetype sits out returns null — makeScene zero-fills
+// missing lanes.
+const GROOVES = {
+  fourfloor: {
+    weight: 22,
+    tempo: [116, 130],
+    swing: [0, 0.12],
+    bass: [["offbeat8", 3], ["bounce", 2], ["roots", 1]],
+    melodyGap: 0.55,
+    kits: ["clean", "street", "funk"],
+    drums() {
+      const kick = dlane((s) => (s % 4 === 0 ? 0.92 + rnd() * 0.08 : 0));
+      const snare = dlane((s) => (s === 4 || s === 12 ? 0.85 + rnd() * 0.1 : 0));
+      const sixteens = rnd() < 0.35;
+      const hat = dlane((s) => {
+        if (s % 2 === 0) return (s % 4 === 2 ? 0.8 : 0.5) + rnd() * 0.15;
+        return sixteens ? 0.35 + rnd() * 0.15 : 0;
+      });
+      const clap = rnd() < 0.5 ? dlane((s) => (s === 4 || s === 12 ? 0.7 + rnd() * 0.15 : 0)) : null;
+      return { kick, snare, hat, clap };
+    },
+  },
+  backbeat: {
+    weight: 26,
+    tempo: [84, 110],
+    swing: [0.06, 0.22],
+    bass: [["roots", 3], ["bounce", 1], ["offbeat8", 1]],
+    melodyGap: 0.5,
+    kits: ["funk", "warm", "street"],
+    drums() {
+      const kick = dlane((s) => {
+        if (s === 0 || s === 8) return 0.9 + rnd() * 0.1;
+        if ((s === 6 || s === 10 || s === 14) && rnd() < 0.3) return 0.6 + rnd() * 0.15;
+        return 0;
+      });
+      const snare = dlane((s) => (s === 4 || s === 12 ? 0.85 + rnd() * 0.1 : 0));
+      const hat = dlane((s) => {
+        if (s % 2 === 0) return (s % 4 === 2 ? 0.8 : 0.55) + rnd() * 0.15;
+        return rnd() < 0.15 ? 0.35 : 0;
+      });
+      const clap = dlane((s) => ((s === 6 || s === 14) && rnd() < 0.35 ? 0.6 + rnd() * 0.15 : 0));
+      return { kick, snare, hat, clap };
+    },
+  },
+  halftime: {
+    weight: 18,
+    tempo: [70, 92],
+    swing: [0, 0.15],
+    bass: [["drone", 3], ["roots", 2]],
+    melodyGap: 0.65,
+    kits: ["808", "heavy", "dusty"],
+    drums() {
+      // One pickup, chosen once — a per-step coin here fires 7 AND 10.
+      const pickup = rnd() < 0.7 ? (rnd() < 0.5 ? 7 : 10) : -1;
+      const kick = dlane((s) => (s === 0 ? 1 : s === pickup ? 0.75 + rnd() * 0.15 : 0));
+      const snare = dlane((s) => (s === 8 ? 0.95 : 0));
+      const rolls = rnd() < 0.5;
+      const hat = dlane((s) => {
+        if (rolls) return s % 2 === 1 ? 0.3 + rnd() * 0.2 : 0.55 + rnd() * 0.25;
+        return s % 2 === 0 ? 0.5 + rnd() * 0.2 : 0;
+      });
+      const clap = rnd() < 0.6 ? dlane((s) => (s === 8 ? 0.7 : 0)) : null;
+      return { kick, snare, hat, clap };
+    },
+  },
+  twostep: {
+    weight: 16,
+    tempo: [118, 134],
+    swing: [0.25, 0.45],
+    bass: [["roots", 2], ["offbeat8", 2], ["bounce", 1]],
+    melodyGap: 0.45,
+    kits: ["garage", "street", "dusty"],
+    drums() {
+      const second = pickW([[6, 2], [7, 2], [10, 3]]);
+      const kick = dlane((s) => {
+        if (s === 0) return 0.95;
+        if (s === second) return 0.8 + rnd() * 0.1;
+        if (s === 14 && rnd() < 0.3) return 0.65;
+        return 0;
+      });
+      const snare = dlane((s) => (s === 4 || s === 12 ? 0.85 + rnd() * 0.1 : 0));
+      const ghosts = euclid(16, rint(3, 5), rint(0, 3));
+      const hat = dlane((s) => {
+        if (s % 4 === 2) return 0.8 + rnd() * 0.15;
+        return ghosts[s] && rnd() < 0.7 ? 0.3 + rnd() * 0.15 : 0;
+      });
+      const clap = dlane((s) => (s === 12 && rnd() < 0.4 ? 0.65 : 0));
+      return { kick, snare, hat, clap };
+    },
+  },
+  minimal: {
+    weight: 18,
+    tempo: [96, 124],
+    swing: [0.1, 0.3],
+    bass: [["drone", 2], ["roots", 2], ["offbeat8", 1]],
+    melodyGap: 0.7,
+    kits: ["dusty", "warm", "clean"],
+    drums() {
+      const kicks = euclid(16, rint(2, 3), 0);
+      const kick = dlane((s) => (kicks[s] ? 0.85 + rnd() * 0.15 : 0));
+      const snare = dlane((s) => (s === 12 && rnd() < 0.6 ? 0.8 : 0));
+      const hats = euclid(16, rint(5, 7), rint(0, 2));
+      const hat = dlane((s) => (hats[s] ? 0.4 + rnd() * 0.2 : 0));
+      const clap = dlane((s) => (s === 8 && rnd() < 0.3 ? 0.55 : 0));
+      return { kick, snare, hat, clap };
+    },
+  },
+};
 
-  // Octaves 3-5. Octave 2 measured ~4 dB down through the lead highpass and
-  // sits on top of the bass register — thin AND muddy, so it's out.
-  const melodyBases = [48, 60, 72];
-  const melodyBase = melodyBases[Math.floor(Math.random() * melodyBases.length)];
-  const melodyNotes = scaleNotes(melodyBase, 15);
+// The vibe holds ONLY rolled values (plus the groove name) — archetype
+// constants stay in GROOVES and are derived where needed, so the vibe can
+// persist on the song and any later scene generated from it (the session
+// Magic button, the ✨b variation) speaks the same roll.
+function rollVibe() {
+  const groove = pickW(Object.entries(GROOVES).map(([name, g]) => [name, g.weight]));
+  const g = GROOVES[groove];
+  return {
+    groove,
+    tempo: rint(g.tempo[0], g.tempo[1]),
+    swing: Math.round((g.swing[0] + rnd() * (g.swing[1] - g.swing[0])) * 100) / 100,
+    // The groove hires its kit more often than not; the rest keep the surprise.
+    kit: rnd() < 0.6 ? pickFrom(g.kits) : null,
+    // Registers roll once per vibe so every scene in the song lives in the
+    // same octave. Melody sits in octaves 3-5: octave 2 measured ~4 dB down
+    // through the lead highpass and sits on the bass register — out.
+    melodyBase: pickFrom([48, 60, 72]),
+    bassBase: rnd() < 0.5 ? 36 : 24,
+    // Space: about a third of rolls arrive wet, keyed by track and send —
+    // verb on the pad and lead, echo on the lead, never bass or drums
+    // (low-end discipline; the returns are highpassed and ride the kick
+    // duck, so wet stays clean). The app side applies this generically.
+    wet: rnd() < 0.35
+      ? {
+          harmony: { verb: rint(-16, -9) },
+          melody: { verb: rint(-18, -10), ...(rnd() < 0.6 ? { echo: rint(-18, -10) } : {}) },
+        }
+      : null,
+    harmonyOct: rnd() < 0.15 ? (rnd() < 0.5 ? 1 : -1) : 0,
+    polymeter: rnd() < 0.1 ? (rnd() < 0.5 ? "bass" : "melody") : null,
+    bScene: rnd() < 0.6,
+  };
+}
+
+// Weighted progression families in scale degrees. Length is part of the roll:
+// cadences run 4 bars, vamps 2, statics 1 — the arrangement and clip loops
+// follow the harmony length wherever it lands.
+const CADENCES = [[0, 4, 5, 3], [0, 5, 3, 4], [5, 3, 0, 4], [0, 3, 4, 3], [1, 4, 0, 0], [0, 3, 0, 4], [0, 0, 3, 4], [5, 4, 3, 4]];
+const VAMPS = [[0, 5], [0, 3], [5, 3], [1, 4], [0, 4], [5, 4], [0, 6], [3, 4]];
+function magicHarmony() {
+  const fam = pickW([["cadence", 45], ["vamp", 25], ["static", 10], ["wander", 20]]);
+  if (fam === "cadence") return pickFrom(CADENCES).slice();
+  if (fam === "vamp") return pickFrom(VAMPS).slice();
+  if (fam === "static") return [rint(0, 6)];
+  return Array.from({ length: 4 }, () => rint(0, 6)); // the surprise generator
+}
+
+// A melody is a motif, repeated: generate a short cell, tile it with scale-
+// step transposition and drop-note variation, and let the groove's gap hint
+// leave breathing room. Uniform scatter can't hook; repetition can.
+const MOTIF_SHIFTS = [[0, 5], [1, 2], [-1, 2], [2, 1], [-2, 1]];
+function magicMelody(vibe) {
+  const win = scaleNotes(vibe.melodyBase, 14);
+  const gap = GROOVES[vibe.groove].melodyGap;
+  const motifLen = rnd() < 0.5 ? 4 : 8;
+  const count = motifLen === 4 ? rint(2, 3) : rint(3, 5);
+  const offs = new Set([0]);
+  while (offs.size < count) {
+    offs.add(rnd() < 0.8 ? 2 * rint(0, motifLen / 2 - 1) : rint(0, motifLen - 1));
+  }
+  const clampIdx = (i) => Math.max(0, Math.min(win.length - 1, i));
+  const anchor = rint(4, 9);
+  const events = [...offs].sort((a, b) => a - b).map((off) => ({
+    off,
+    idx: clampIdx(anchor + rint(-3, 3)),
+    len: rnd() < 0.35 ? 2 : 1,
+    vel: 0.65 + rnd() * 0.3,
+  }));
   const melody = new Array(16).fill(null);
-  for (let s = 0; s < 16; s++) {
-    if (Math.random() < 0.3) {
-      melody[s] = [{ midi: melodyNotes[Math.floor(Math.random() * melodyNotes.length)], len: 1, vel: 0.7 + Math.random() * 0.3 }];
+  const writeRep = (rep, shift, always) => {
+    for (const ev of events) {
+      if (!always && rnd() < 0.15) continue;
+      const s = rep * motifLen + ev.off;
+      if (s >= 16) return;
+      melody[s] = [{ midi: win[clampIdx(ev.idx + shift)], len: ev.len, vel: Math.max(0.4, Math.min(1, ev.vel + rnd() * 0.1 - 0.05)) }];
     }
+  };
+  writeRep(0, 0, true);
+  for (let rep = 1; rep * motifLen < 16; rep++) {
+    if (rnd() < gap) continue;
+    writeRep(rep, pickW(MOTIF_SHIFTS), false);
   }
-  // Floor at four notes: a 2-note roll reads as a dud, not a melody. Fill on
-  // empty 8th-grid steps so the top line stays a hook, never a wash.
-  const emptyEvens = () => [0, 2, 4, 6, 8, 10, 12, 14].filter((s) => !melody[s]);
-  while (melody.filter(Boolean).length < 4) {
-    const open = emptyEvens();
-    const s = open[Math.floor(Math.random() * open.length)];
-    melody[s] = [{ midi: melodyNotes[Math.floor(Math.random() * melodyNotes.length)], len: 2, vel: 0.75 + Math.random() * 0.2 }];
-  }
+  // Never a dud: if the gaps ate too much, the motif answers itself.
+  if (melody.filter(Boolean).length < 3) writeRep(8 / motifLen, 0, true);
+  return melody;
+}
 
-  const bassBase = Math.random() < 0.5 ? 36 : 24;
-  const bassNotes = scaleNotes(bassBase, 12);
-  const bassPick = () => bassNotes[Math.floor(Math.random() * Math.min(bassNotes.length, 5))];
+// Bass behaviors, weighted per groove: root-quarters with pickups (the old
+// default), offbeat 8ths (house), a drone (halftime weight), octave bounce.
+function magicBass(vibe) {
+  const notes = scaleNotes(vibe.bassBase, 12);
+  const low = notes.slice(0, 5);
+  const root = notes[0];
+  const fifth = notes[Math.min(4, notes.length - 1)];
   const bass = new Array(16).fill(null);
-  for (let s = 0; s < 16; s += 4) {
-    if (Math.random() < 0.8) {
-      bass[s] = [{ midi: bassPick(), len: 4, vel: 0.9 }];
+  const behavior = pickW(GROOVES[vibe.groove].bass);
+  if (behavior === "drone") {
+    bass[0] = [{ midi: root, len: 8, vel: 0.9 }];
+    bass[8] = [{ midi: rnd() < 0.3 ? root + 12 : root, len: 8, vel: 0.85 }];
+  } else if (behavior === "offbeat8") {
+    for (let s = 2; s < 16; s += 4) {
+      bass[s] = [{ midi: rnd() < 0.25 ? fifth : root, len: 2, vel: 0.85 + rnd() * 0.1 }];
+    }
+  } else if (behavior === "bounce") {
+    for (let s = 0; s < 16; s += 2) {
+      if (rnd() < 0.2) continue;
+      bass[s] = [{ midi: s % 4 === 2 ? root + 12 : root, len: 2, vel: (s % 4 === 0 ? 0.9 : 0.75) + rnd() * 0.1 }];
+    }
+    if (!bass[0]) bass[0] = [{ midi: root, len: 2, vel: 0.9 }];
+  } else {
+    const pickLow = () => pickFrom(low);
+    for (let s = 0; s < 16; s += 4) {
+      if (rnd() < 0.8) bass[s] = [{ midi: pickLow(), len: 4, vel: 0.9 }];
+    }
+    if (!bass.some(Boolean)) bass[0] = [{ midi: pickLow(), len: 4, vel: 0.9 }];
+    // Syncopation: a short pickup on the "and" — the held note underneath
+    // gets cut short so the low end never doubles up.
+    for (const s of [6, 14]) {
+      if (rnd() < 0.45 && !bass[s]) {
+        const held = bass[s - 2]?.[0];
+        if (held) held.len = 2;
+        bass[s] = [{ midi: pickLow(), len: 2, vel: 0.7 + rnd() * 0.15 }];
+      }
     }
   }
-  if (!bass.some(Boolean)) {
-    bass[0] = [{ midi: bassPick(), len: 4, vel: 0.9 }];
-  }
-  // Syncopation: a short pickup on the "and" before beat 3 or pushing into
-  // the next bar — what makes a bassline groove instead of plod. The held
-  // note underneath gets cut short so the low end never doubles up.
-  for (const s of [6, 14]) {
-    if (Math.random() < 0.45 && !bass[s]) {
-      const held = bass[s - 2]?.[0];
-      if (held) held.len = 2;
-      bass[s] = [{ midi: bassPick(), len: 2, vel: 0.7 + Math.random() * 0.15 }];
-    }
-  }
+  return bass;
+}
 
-  const scene = makeScene(harmony, drums, melody, bass);
+export function makeMagicScene(vibe) {
+  // Tolerate no vibe (fresh roll) and pre-vibe or trimmed song.vibe shapes
+  // from older saves — anything that can't drive the generators re-rolls.
+  if (!GROOVES[vibe?.groove] || vibe.melodyBase == null) vibe = rollVibe();
+  const drums = GROOVES[vibe.groove].drums();
+  drums.kick[0] = Math.max(drums.kick[0], 0.95); // the downbeat anchor, always
+  const scene = makeScene(magicHarmony(), drums, magicMelody(vibe), magicBass(vibe));
   scene.tag = "✨";
+  scene.harmonyOct = vibe.harmonyOct;
+  if (vibe.polymeter) scene.steps[vibe.polymeter] = 12;
   return scene;
+}
+
+// The B side: the same song idea with the furniture moved — a fresh motif in
+// the same register (the vibe carries it), drums thinned or busied, the
+// progression rotated. Same key, same groove: somewhere to GO once the A
+// loop lands.
+function makeVariationScene(a, vibe) {
+  const b = cloneScene(a);
+  b.tag = "✨b";
+  b.melody = normalizeNoteLane(magicMelody(vibe));
+  if (rnd() < 0.5) {
+    // thin: drop the clap, pull the hats back
+    b.drums.clap.fill(0);
+    b.drums.hat = b.drums.hat.map((v, s) => (s % 2 === 1 ? 0 : v * 0.85));
+  } else {
+    // busy: ghost hats fill the gaps, one extra kick late in the bar
+    const ghosts = euclid(16, rint(9, 11), rint(0, 2));
+    b.drums.hat = b.drums.hat.map((v, s) => v || (ghosts[s] ? 0.3 + rnd() * 0.1 : 0));
+    const extra = rnd() < 0.5 ? 10 : 14;
+    if (!b.drums.kick[extra]) b.drums.kick[extra] = 0.7;
+  }
+  if (a.harmony.length >= 2 && rnd() < 0.5) b.harmony = [...a.harmony.slice(1), a.harmony[0]];
+  return b;
 }
 
 export function cloneScene(scene) {
@@ -373,15 +599,26 @@ export function makeSong() {
   const key = Math.floor(Math.random() * 12);
   const scale = SCALE_NAMES[Math.floor(Math.random() * SCALE_NAMES.length)];
   setScaleContext(key, scale);
-  const s = defaultScene();
-  const len = s.harmony.length;
-  const tempo = Math.floor(70 + Math.random() * 61); // 70-130
+  // One vibe per song: tempo, pocket, and space come from the same roll the
+  // patterns do, so the parts agree on what kind of thing they're playing.
+  const vibe = rollVibe();
+  const s = makeMagicScene(vibe);
+  const scenes = [s];
+  if (vibe.bScene) scenes.push(makeVariationScene(s, vibe));
+  // Place at least 4 bars on the timeline: content loops inside a placed
+  // clip, but the timeline itself has a 4-bar floor — a 1-bar vamp placed
+  // at its own length would export as one bar of music and three of silence.
+  const len = Math.max(4, s.harmony.length);
   return {
-    tempo,
+    tempo: vibe.tempo,
     key,
     scale,
     trackSwing: {},
-    scenes: [s],
+    // The whole vibe rides the song: the app side finishes the roll from it
+    // (kit, wet sends), and any later scene generated for this song — the
+    // session Magic button included — reuses the same roll.
+    vibe,
+    scenes,
     // Arrangement: per track, clips placed on the bar timeline. Each references
     // a scene's clip for that track (start + length in bars) — Ableton's model
     // of dragging Session clips into the linear timeline.
@@ -396,7 +633,7 @@ export function makeSong() {
     // session record — M/S moves during a take are part of the performance.
     mutes: {},
     loop: { on: false, start: 0, len: 4 },
-    swing: 0.16, // global groove (16th-note swing amount)
+    swing: vibe.swing, // global groove, rolled inside the archetype's pocket
   };
 }
 

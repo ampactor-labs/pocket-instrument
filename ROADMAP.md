@@ -21,8 +21,10 @@ Shipped since the last revision: clip launch modes + follow-actions, the vertica
 sends, sidechain duck, per-preset loudness calibration, session record, WAV/stem export,
 project files, the dice, the morphable devices (XY pad between the preset corners +
 color/motion slot per track, calibration-gated), the bundled drum sample bank with
-per-voice pins and user WAVs, and motion capture — per-scene 16-step automation lanes
-recorded by riding the sound pad (DECISIONS D5).
+per-voice pins and user WAVs, motion capture — per-scene 16-step automation lanes
+recorded by riding the sound pad (DECISIONS D5) — and the archetype dice (DECISIONS D9):
+grooves with coupled tempo/pocket/kit, motif melodies, weighted harmony families, bass
+behaviors, wet rolls, and a ✨b variation scene.
 
 ## Performance (Galaxy A16 5G / Dimensity 6300)
 
