@@ -422,10 +422,22 @@ function buildGraph({ meters = false, exportGrade = false } = {}) {
     g.reverbOut = new Tone.Gain(Tone.dbToGain(4.5)).connect(g.musicDuck);
     const tunings = [0.0253, 0.02896, 0.03224, 0.03667];
     tunings.forEach((delayTime, i) => {
-      const comb = new Tone.LowpassCombFilter({ delayTime, resonance: 0.78, dampening: 2600 });
+      // Native feedback combs, NOT Tone.LowpassCombFilter: that class is an
+      // AudioWorklet whose processor runs its JS on the audio thread FOREVER
+      // once constructed — process() returns !disposed — connected or not.
+      // A DelayNode inside the loop makes the cycle legal, and native nodes
+      // truly stop when unreachable, so a parked verb costs zero.
+      const sum = new Tone.Gain(1);
+      const delay = new Tone.Delay({ delayTime, maxDelay: 0.05 });
+      const damp = new Tone.Filter({ type: "lowpass", frequency: 2600, Q: 0.5 });
+      const fb = new Tone.Gain(0.78);
+      g.reverb.connect(sum);
+      sum.connect(delay);
+      delay.connect(damp);
+      damp.connect(fb);
+      fb.connect(sum);
       const pan = new Tone.Panner(i % 2 === 0 ? -0.6 : 0.6).connect(g.reverbOut);
-      g.reverb.connect(comb);
-      comb.connect(pan);
+      damp.connect(pan);
     });
   }
   g.reverbHP = new Tone.Filter({ type: "highpass", frequency: 200, Q: 0.7 }).connect(g.reverb);
