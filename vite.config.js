@@ -14,8 +14,12 @@ export default defineConfig({
     // whole thing including the drum bank is about a megabyte, so precaching
     // everything is honest: installed, noodles works in airplane mode.
     VitePWA({
-      registerType: "autoUpdate", // silently current on next launch; no update nags
-      injectRegister: "auto",
+      registerType: "autoUpdate", // skipWaiting + clientsClaim; the app decides when to swap
+      // Registration lives in src/main.js: it needs updateViaCache:"none"
+      // (Pages serves sw.js with max-age=600 — the injected script would let a
+      // launch check a ten-minute-old copy and miss a fresh deploy) and it has
+      // to know whether swapping the running page is safe.
+      injectRegister: null,
       workbox: {
         // The sample bank is the reason offline is real — without the WAVs the
         // drums fall back to the synth kit and it isn't the same instrument.

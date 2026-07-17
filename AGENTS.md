@@ -43,6 +43,16 @@ zero external requests, so offline is total, not partial. `npm run icons` regene
 clip-grid home-screen icons into `public/icons/` (only if the mark or track colors change).
 Service workers do not exist on the dev server — test install/offline on `preview`.
 
+**Updates** (registration is hand-rolled in `src/main.js`, not `injectRegister` — it needs
+`updateViaCache:"none"` because Pages serves `sw.js` with `max-age=600`): a new build
+installs in the background, and the app swaps the running page **only when nothing is at
+stake** — `userTouched` (set by the first sound via `ensureStarted` and the first edit via
+`pushUndo`) gates the `controllerchange` reload, so an untouched cold launch silently
+becomes the new version while a jam is never interrupted. A skipped swap surfaces as a
+pull-only "new version ready · restart" row in the ? page and lands on the next launch
+regardless. Both promises are receipted by `.tmp/dbg-pwa-update.mjs`, which builds two
+versions and swaps them under a live browser.
+
 ## Verify — read this, it's the load-bearing workflow
 
 There is **no test suite** and the UI only makes sense on a phone-sized touch screen. Every

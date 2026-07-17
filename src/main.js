@@ -160,8 +160,18 @@ function capturePointer(node, pointerId) {
 
 const buzz = (ms = 8) => navigator.vibrate?.(ms);
 
+// Has this session got anything worth not losing? Set by the first sound and
+// the first edit; read by the service-worker swap (see the update block below)
+// to decide whether reloading into a new build is free or rude.
+let swUpdateReady = false;
+let userTouched = false;
+const markTouched = () => {
+  userTouched = true;
+};
+
 let audioReady = false;
 async function ensureStarted() {
+  markTouched(); // any sound at all means there's now something to lose
   if (audioReady) return;
   audioReady = true;
   await audio.init();
@@ -194,6 +204,7 @@ function commitUndo(pre) {
   updateUndoButtons();
 }
 function pushUndo() {
+  markTouched(); // an edit (a dice roll included) is work worth not losing
   commitUndo(snapshot());
 }
 function refreshAll() {
@@ -375,6 +386,22 @@ function openAboutSheet() {
     p("Install it and noodles leaves the browser behind: full screen, its own icon, and everything — sounds, samples, exports — works with no signal at all."),
 
     p("Made for couches and phone speakers. Tell your friends."),
+
+    // A new build arrived while you were playing, so it wasn't taken. It's
+    // already downloaded and the next launch runs it — this is just the door,
+    // for when you'd rather have it now.
+    ...(swUpdateReady
+      ? [
+          el("div", { class: "tfrow" }, [
+            el("div", {
+              class: "tfbtn accent",
+              text: "new version ready · restart",
+              "data-action": "apply-update",
+              onclick: () => location.reload(),
+            }),
+          ]),
+        ]
+      : []),
 
     // Only when the browser says it qualifies and isn't installed yet.
     ...(installPrompt
@@ -3327,6 +3354,35 @@ function openExport() {
 // ---------------------------------------------------------------------------
 // Playback → UI sync
 // ---------------------------------------------------------------------------
+if ("serviceWorker" in navigator) {
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    // No controller at load = the worker's first install, same code as this
+    // page — nothing to swap.
+    if (!hadController) return;
+    if (userTouched) swUpdateReady = true;
+    else location.reload();
+  });
+  window.addEventListener("load", () => {
+    navigator.serviceWorker
+      .register(`${import.meta.env.BASE_URL}sw.js`, {
+        scope: import.meta.env.BASE_URL,
+        updateViaCache: "none", // always ask the network; Pages caches sw.js for 600 s
+      })
+      .then((reg) => {
+        // An installed app can sit open for days, and the browser only checks
+        // on navigation. Check when it comes back to the foreground too.
+        let lastCheck = Date.now();
+        document.addEventListener("visibilitychange", () => {
+          if (document.hidden || Date.now() - lastCheck < 15 * 60 * 1000) return;
+          lastCheck = Date.now();
+          reg.update().catch(() => {});
+        });
+      })
+      .catch(() => {});
+  });
+}
+
 // Install: Chrome fires beforeinstallprompt when the app qualifies (manifest +
 // service worker + not already installed). Stash it — never act on it. The
 // browser's own menu is one path; the ? page offers the other, on a tap, like
