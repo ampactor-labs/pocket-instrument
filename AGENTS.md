@@ -36,6 +36,13 @@ npm run build && npm run preview -- --host
 The dev server ships unbundled ES modules + unminified Tone.js; on the A16's little cores
 that parse/waterfall cost is large and misleading. Judge speed on the prod build.
 
+The prod build is also a **PWA** (`vite-plugin-pwa`, config in `vite.config.js`): installed,
+it runs standalone with no browser chrome and works with no network at all — the service
+worker precaches everything including the 16 drum WAVs (~915 KB, 28 entries). The app has
+zero external requests, so offline is total, not partial. `npm run icons` regenerates the
+clip-grid home-screen icons into `public/icons/` (only if the mark or track colors change).
+Service workers do not exist on the dev server — test install/offline on `preview`.
+
 ## Verify — read this, it's the load-bearing workflow
 
 There is **no test suite** and the UI only makes sense on a phone-sized touch screen. Every

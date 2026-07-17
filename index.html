@@ -11,7 +11,14 @@
     <meta property="og:title" content="noodles · a pocket instrument" />
     <meta property="og:description" content="An instrument, not a demo: everything you hear is editable, and the dice rolls a whole new song. Your first beat is thirty seconds away." />
     <meta property="og:type" content="website" />
-    <link rel="icon" href="data:," />
+    <link rel="icon" href="/noodles/icons/icon-192.png" type="image/png" />
+    <!-- iOS ignores the manifest for home-screen icons and composites its own
+         rounding, so it gets the full-bleed art directly. -->
+    <link rel="apple-touch-icon" href="/noodles/icons/apple-touch-icon.png" />
+    <meta name="theme-color" content="#1b1b1d" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="noodles" />
     <style>
       /* Registered so the clip pie timers can transition it (smooth sweep
          instead of 16th-note jumps). Unsupported browsers just jump.

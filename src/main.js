@@ -372,8 +372,34 @@ function openAboutSheet() {
 
     label("keep it"),
     p("File saves the project to a file or keeps it on this device, and exports a WAV — master or four stems — through the exact chain you're hearing. Mic recordings last until the tab closes; save the project to keep everything else."),
+    p("Install it and noodles leaves the browser behind: full screen, its own icon, and everything — sounds, samples, exports — works with no signal at all."),
 
     p("Made for couches and phone speakers. Tell your friends."),
+
+    // Only when the browser says it qualifies and isn't installed yet.
+    ...(installPrompt
+      ? [
+          el("div", { class: "tfrow" }, [
+            el("div", {
+              class: "tfbtn accent",
+              text: "install · noodles",
+              "data-action": "install-app",
+              onclick: async (e) => {
+                const prompt = installPrompt;
+                if (!prompt) return;
+                e.target.textContent = "installing…";
+                installPrompt = null;
+                try {
+                  await prompt.prompt();
+                } catch {
+                  /* dismissed — the browser menu still has it */
+                }
+                e.target.remove();
+              },
+            }),
+          ]),
+        ]
+      : []),
 
     el("div", { class: "tfrow" }, [
       el("div", {
@@ -3301,6 +3327,19 @@ function openExport() {
 // ---------------------------------------------------------------------------
 // Playback → UI sync
 // ---------------------------------------------------------------------------
+// Install: Chrome fires beforeinstallprompt when the app qualifies (manifest +
+// service worker + not already installed). Stash it — never act on it. The
+// browser's own menu is one path; the ? page offers the other, on a tap, like
+// every other thing this app knows how to do.
+let installPrompt = null;
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();
+  installPrompt = e;
+});
+window.addEventListener("appinstalled", () => {
+  installPrompt = null;
+});
+
 // Pull-only perf receipts: a bottom-edge overlay with frame and audio-clock
 // health, toggled from the ? page (or forced with ?perf in the URL). The A16
 // gate needs numbers from the couch, not adjectives — pure diagnostics,

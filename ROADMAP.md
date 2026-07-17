@@ -61,6 +61,12 @@ was tried and reverted — Tone throws wrapping custom-rate contexts (see AGENTS
 preview -- --host`. The dev server ships unbundled ESM + unminified Tone.js; on the A55
 cores that parse/waterfall cost dwarfs everything else.
 
+Also shipped: **installable + fully offline** (PWA — manifest, standalone display, Workbox
+precache of all 28 files including the drum bank; the app makes zero external requests, so
+airplane mode is a non-event). Install lives behind the browser menu and a pull-only row in
+the ? page. Receipt: `.tmp/dbg-pwa.mjs` cuts the network and proves it boots, rolls, and
+plays.
+
 ## Later / ideas
 
 - Piano roll: note-name labels on blocks, velocity as stems (partly done).

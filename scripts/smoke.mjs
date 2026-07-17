@@ -143,6 +143,20 @@ try {
   await page.waitForSelector("#transport", { visible: true });
   await wait(500);
 
+  // The PWA must actually register: without a live service worker there is no
+  // install prompt and no offline. (Full offline proof: .tmp/dbg-pwa.mjs.)
+  const sw = await page.evaluate(async () => {
+    if (!navigator.serviceWorker) return { ok: false, why: "no serviceWorker API" };
+    const reg = await Promise.race([
+      navigator.serviceWorker.ready.then(() => true),
+      new Promise((r) => setTimeout(() => r(false), 10000)),
+    ]);
+    const manifest = document.querySelector('link[rel="manifest"]')?.href;
+    return { ok: !!reg, manifest };
+  });
+  assertState(sw.ok, `service worker did not register: ${sw.why ?? "timed out"}`);
+  assertState(!!sw.manifest, "no manifest link in the document");
+
   const initial = await page.evaluate(() => ({
     transport: !!document.querySelector("#transport"),
     clips: document.querySelectorAll(".clip.filled").length,
