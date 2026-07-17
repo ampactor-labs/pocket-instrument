@@ -1,10 +1,31 @@
+import { execSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
+
+// The version shown on the ? page: package.json's version, plus the short
+// commit it was built from so a bug report names an exact build. A dirty tree
+// (uncommitted changes) is stamped so a hand-built preview never masquerades as
+// a clean release. Git absent (a tarball build) falls back to the bare version.
+const pkgVersion = JSON.parse(readFileSync(new URL("./package.json", import.meta.url))).version;
+const buildStamp = (() => {
+  try {
+    const sha = execSync("git rev-parse --short HEAD").toString().trim();
+    const dirty = execSync("git status --porcelain").toString().trim() ? "-dev" : "";
+    return `${sha}${dirty}`;
+  } catch {
+    return "nogit";
+  }
+})();
 
 // Modern mobile browsers are the target; keep the bundle lean and skip legacy
 // transforms/polyfills for this phone-first prototype.
 export default defineConfig({
   base: "/noodles/",
+  define: {
+    __APP_VERSION__: JSON.stringify(pkgVersion),
+    __BUILD__: JSON.stringify(buildStamp),
+  },
   build: { target: "esnext" },
   esbuild: { target: "esnext" },
   optimizeDeps: { esbuildOptions: { target: "esnext" } },

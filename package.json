@@ -1,7 +1,7 @@
 {
   "name": "noodles",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "smoke": "node scripts/smoke.mjs",
     "calibrate": "node scripts/calibrate.mjs",
+    "audit": "node scripts/audit.mjs",
     "samples": "node scripts/make-samples.mjs",
     "icons": "node scripts/make-icons.mjs"
   },

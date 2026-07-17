@@ -217,10 +217,18 @@ Plus tier-2 performance work listed in `ROADMAP.md` (diff-based cell repaints, p
 - **Two gates before claiming anything works:** `npm run smoke` (headless Chrome drives the
   core flow of launch, editors, record, export, and dice, and fails on any page error) and,
   if you touched the audio chain or presets, `npm run calibrate` (renders every preset
-  through the real graph and prints RMS/peak tables; per-track spreads should stay ≲2.5 dB).
-  A green `npm run build` proves nothing about runtime.
-- **`window.__noodles`** exposes `{ song, audio, applyProject }` for the headless harnesses.
-  It is not a public API, but keep it working; smoke and calibrate depend on it.
+  through the real graph and prints RMS/peak tables; read the stem spreads against the master
+  row, which stays ~1 dB). A green `npm run build` proves nothing about runtime.
+- **Touching the master chain gets a third gate: `npm run audit`.** It renders through the
+  real `buildGraph` and measures what the chain DOES against what its constants say — spec
+  compressor makeup, per-stage gain and slope, 60 Hz harmonics vs level, bus alignment,
+  stereo width, BS.1770-4 LUFS, and 4x true peak — with a meter self-test up top that must
+  pass before its numbers mean anything. Constants in `audio.js` are commented with the
+  measurement they came from; if you change one, re-run this and update the number. Add
+  `-- --program` for a fast LUFS/true-peak-only loop, `-- --quick` to skip the dice section.
+- **`window.__noodles`** (`{ song, audio, applyProject }`) and **`window.__noodlesGraph`**
+  (`buildGraph` itself, so the audit measures the real chain) back the headless harnesses.
+  Not a public API, but keep them working; smoke, calibrate, and audit depend on them.
 
 ## Stale docs — read for philosophy, not for what to build
 

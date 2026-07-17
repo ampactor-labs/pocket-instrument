@@ -462,6 +462,12 @@ function openAboutSheet() {
         el("div", { class: "tfbtn", text: "later +", "data-action": "sync-nudge-up", onclick: () => nudge(10) }),
       ]);
     })(),
+
+    // The build, so a bug report names an exact one. __APP_VERSION__ and
+    // __BUILD__ are compiled in by Vite (see vite.config.js) — package.json's
+    // version plus the short commit, "-dev" appended when built from a dirty
+    // tree.
+    el("div", { class: "about-foot", text: `noodles v${__APP_VERSION__} · ${__BUILD__}` }),
   ]);
   sheet.appendChild(body);
   openSheet();

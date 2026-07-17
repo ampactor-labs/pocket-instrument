@@ -1,8 +1,29 @@
 // Mix calibration: render every device preset through the real offline graph
 // (which IS the live graph — see buildGraph in src/audio.js) against a fixed
 // reference scene, and report per-preset loudness. The preset gain trims in
-// audio.js are tuned until every preset of a track lands at the same RMS, so
-// the on-load randomizer can roll anything and the balance holds.
+// audio.js are tuned so the on-load randomizer can roll anything and the
+// balance holds.
+//
+// Read this stem spread against the master row, NOT on its own — that is the
+// re-baseline the honest gain structure forced. The old chain applied +14 dB
+// of gain nobody wrote (Web Audio's mandated compressor makeup, an
+// un-normalized tanh, an equal-power crossfade of coherent paths — see the
+// master-chain comment in audio.js), which drove every stem deep into the
+// glue and ceiling where the transfer slope flattens to ~0.1 dB/dB. That
+// compression HID the preset spreads: a 3 dB trim difference read as 0.3 dB
+// through the squash, so ±1.5 dB looked easy and meant nothing. `npm run audit`
+// measures the slope directly.
+//
+// With the gain removed, stems pass mostly linear (slope 1.0 below -30 dBFS),
+// so the spreads you see now are the real ones — WIDER, and that is the ceiling
+// no longer lying, not a regression. What still has to hold is the MASTER row:
+// full mixes glue and level-match at the bus the way they always did, so
+// master spread stays ~1 dB and the dice rolls land within ~1 dB of each other
+// (npm run audit, dice section). That is the property the randomizer actually
+// needs — roll any sound, get a balanced mix. Same-register melodic presets
+// should still sit within ~1.5 dB of each other; the kit RMS spread runs wider
+// because it counts sub energy a phone can't reproduce (the 808's boom reads
+// hot on flat RMS and level on `hi`), so judge kits on `hi`, not rms.
 //
 // Usage: npm run calibrate   (prints a dB table + JSON blob)
 
@@ -255,6 +276,16 @@ try {
   const spreadOf = (vals) => Math.round((Math.max(...vals) - Math.min(...vals)) * 10) / 10;
   const spread = (group) => spreadOf(Object.values(group).map((s) => s.rms));
   for (const [name, group] of Object.entries(report)) {
+    if (name === "kits") {
+      // Kits print `hi` (speaker-band, above 80 Hz) alongside rms, because the
+      // 808's boomy kick reads several dB hot on flat RMS and level on hi —
+      // sub a phone can't move. Judge the spread on the hi column.
+      console.log(`\n== kits (rms / hi / peak dB) — rms spread ${spread(group)} dB, hi spread ${spreadOf(Object.values(group).map((s) => s.hi))} dB ==`);
+      for (const [p, s] of Object.entries(group)) {
+        console.log(`  ${String(p).padEnd(10)} ${String(s.rms).padStart(6)} / ${String(s.hi).padStart(6)} / ${String(s.peak).padStart(6)}`);
+      }
+      continue;
+    }
     if (name === "bassOct") {
       console.log(`\n== bass octave 1 vs 2 (rms dB, hi = above 80 Hz) ==`);
       for (const [p, both] of Object.entries(group)) {

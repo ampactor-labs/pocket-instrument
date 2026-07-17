@@ -68,7 +68,8 @@ Run from the repo root (the app moved up out of `prototype/`, so an old shell si
 - `npm run dev -- --host` — Vite dev server; open the printed Network URL on a phone.
 - `npm run build && npm run preview -- --host` — production build and preview; judge on-device performance here, never on the dev server.
 - `npm run smoke` — headless-Chrome smoke test (`puppeteer-core` + a Chrome binary); drives the core flow (launch, editors, record, export, dice) and asserts the transport actually advances, not just that the play button lights up.
-- `npm run calibrate` — renders every device preset through the real signal chain and prints RMS/peak tables. Run it before and after touching `src/audio.js` presets or the master chain; per-track preset spreads should stay within about 1.5 dB or the randomized cold open stops being balanced.
+- `npm run calibrate` — renders every device preset through the real signal chain and prints RMS/peak tables. Run it before and after touching `src/audio.js` presets; read the stem spreads against the master row (which stays ~1 dB), not on their own — the honest chain lets stems read wider than the old compressed one did.
+- `npm run audit` — master-chain forensics: measures what the chain does (spec compressor makeup, per-stage gain and slope, harmonics, bus alignment, stereo width, LUFS, 4x true peak) against what its constants claim, with a meter self-test that must pass first. The gate for any master-chain edit; every gain constant in `src/audio.js` carries the measurement it came from. `-- --program` is a fast LUFS/true-peak loop; `-- --quick` skips the dice section.
 
 ## A note on naming
 

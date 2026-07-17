@@ -30,8 +30,10 @@ import { CHORDS, DRUM_VOICES, voiceLead, clipAt, arrangeLength, clipLaunch, clip
 const swingOffsetFor = (song, track, laneStep) =>
   laneStep % 2 === 1 ? ((((song.trackSwing?.[track] ?? song.swing) || 0) * (15 / song.tempo)) / 3) : 0;
 
-// Debug handle for the headless harnesses; lets calibrate/smoke experiments
-// build minimal Tone graphs without reaching into the bundle.
+// Debug handles for the headless harnesses; lets calibrate/smoke/audit build
+// Tone graphs without reaching into the bundle. __noodlesGraph is buildGraph
+// itself: the audit measures the REAL chain rather than a reconstruction of it,
+// which is the only way its numbers stay true when the chain changes.
 if (typeof window !== "undefined") window.__noodlesTone = Tone;
 
 const midiToFreq = (m) => Tone.Frequency(m, "midi").toFrequency();
@@ -43,6 +45,55 @@ export const MELODIC_TRACKS = ["harmony", "bass", "melody"];
 const DEFAULT_TRACK_VOLUME_DB = -6;
 const SEND_OFF_DB = -60;
 const PLAY_START_LEAD_TIME = "+0.18";
+
+// --- Dynamics, with the gain nobody wrote taken back out ------------------
+//
+// Web Audio mandates an automatic makeup gain on every DynamicsCompressorNode.
+// It is a pure function of (threshold, ratio, knee), it is applied whether or
+// not the compressor is doing anything, and no API reports it — so a
+// "compressor" here was also a gain stage, and the graph paid it three times
+// over. `makeup` is that gain, measured through a real node at -60 dBFS
+// (`npm run audit`, comps table) and subtracted right back out by makeComp().
+// A compressor should compress. Re-measure after touching any of these.
+const COMP_SPECS = {
+  glue: { threshold: -20, ratio: 3, attack: 0.03, release: 0.25, knee: 12, makeup: 5.6 },
+  input: { threshold: -20, ratio: 4, attack: 0.005, release: 0.15, knee: 12, makeup: 6.41 },
+  drumParallel: { threshold: -24, ratio: 4.5, attack: 0.004, release: 0.13, knee: 12, makeup: 8.55 },
+};
+// Every DynamicsCompressorNode carries a fixed lookahead delay (measured:
+// 6.02 ms, identical across all four configs — it is the node, not the
+// settings). It is inaudible on its own and ruinous in parallel: any bus that
+// skips a compressor arrives EARLY and combs against the buses that don't.
+// Every path into the master is delayed to this, and the kick duck is
+// scheduled against it, so the graph sums in phase.
+const COMP_LATENCY = 0.00602;
+
+// A compressor that only compresses.
+function makeComp(spec) {
+  const comp = new Tone.Compressor({
+    threshold: spec.threshold,
+    ratio: spec.ratio,
+    attack: spec.attack,
+    release: spec.release,
+    knee: spec.knee,
+  });
+  const trim = new Tone.Gain(Tone.dbToGain(-spec.makeup));
+  comp.connect(trim);
+  return { input: comp, output: trim };
+}
+
+// A WaveShaper over a wider input domain than ±1. WaveShaperNode clamps its
+// input to ±1 and reads the curve across exactly that window, so a shaper
+// meant to catch overshoots has to scale the signal in and write the curve to
+// match — otherwise every overshoot lands on the curve's clamped endpoint
+// instead of on the curve. `curve` is written in real amplitude; `domain` is
+// how far out it stays honest. Returns [input, output]: connect through both.
+function makeShaper(curve, domain, length, oversample = "none") {
+  const node = new Tone.WaveShaper((x) => curve(x * domain), length);
+  node.oversample = oversample;
+  const scale = new Tone.Gain(1 / domain).connect(node);
+  return [scale, node];
+}
 const SOURCE_LEVEL_DB = {
   harmonyPad: -9,
   harmonyHalo: -23,
@@ -55,7 +106,18 @@ const SOURCE_LEVEL_DB = {
   clap: 3,
 };
 const KICK_DUCK_GAIN = Tone.dbToGain(-12);
-const DRUM_PARALLEL_GAIN = Tone.dbToGain(-8);
+// Both drum bus levels mean what they say now. They used not to: the return's
+// -8 dB rode on top of the drum parallel's +8.55 dB of spec makeup, so the
+// parallel path was really +0.55 dB — louder than the dry bus it was meant to
+// sit under — while the 6 ms comb quietly subtracted it back out. Two large
+// errors that partly cancelled, which is why neither showed up by ear. With
+// the makeup gone and the comb aligned, the parallel path adds weight for the
+// first time, so it is set where a parallel drum bus belongs: under the dry,
+// filling in rather than leading. The dry trim carries the melodic tracks'
+// input-comp makeup (-6.41 dB) that drums never paid, which is what kept the
+// drums balanced against them by accident.
+const DRUM_DRY_GAIN = Tone.dbToGain(-7.4);
+const DRUM_PARALLEL_GAIN = Tone.dbToGain(-13.4);
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // The send knobs sweep -30..0 dB; the bottom of the range is "off".
 const sendGain = (db) => (db <= -29 ? 0 : Tone.dbToGain(db));
@@ -73,12 +135,17 @@ function sliceBuffer(buf, startSec, endSec) {
 }
 
 function scheduleKickDuck(param, time) {
+  // The duck fires where the kick is HEARD, not where it was scheduled. Gain
+  // automation lands in absolute context time, but the signal it acts on has
+  // been through a compressor's lookahead to get here — so a duck scheduled at
+  // the kick's note time ducked a pocket the kick hadn't arrived in yet.
+  const at = time + COMP_LATENCY;
   // Hold whatever the gain is at the kick instant: resetting to 1 first put a
   // +12 dB step on the music bus at the head of every kick — a tick on
   // sustained pads, worst on dense patterns where the bus never fully recovers.
-  param.cancelAndHoldAtTime(time);
-  param.linearRampToValueAtTime(KICK_DUCK_GAIN, time + 0.008);
-  param.exponentialRampToValueAtTime(1, time + 0.25);
+  param.cancelAndHoldAtTime(at);
+  param.linearRampToValueAtTime(KICK_DUCK_GAIN, at + 0.008);
+  param.exponentialRampToValueAtTime(1, at + 0.25);
 }
 
 // --- Preset corners (like drum kits, one set per track) ---
@@ -87,13 +154,13 @@ function scheduleKickDuck(param, time) {
 const HARMONY_PRESETS = {
   pad:     { osc: "sawtooth", filter: 1200, attack: 0.35, decay: 1.5, sustain: 0.8, release: 1.2, chorusWet: 0.4, chorusDepth: 0.7, gain: -4.5 },
   keys:    { osc: "sine",     filter: 3000, attack: 0.01, decay: 0.4, sustain: 0.2, release: 0.4, chorusWet: 0.15, chorusDepth: 0.3, gain: -3 },
-  ambient: { osc: "triangle", filter: 800,  attack: 1.0,  decay: 2.0, sustain: 0.9, release: 2.5, chorusWet: 0.8,  chorusDepth: 0.9, gain: -4 },
+  ambient: { osc: "triangle", filter: 800,  attack: 1.0,  decay: 2.0, sustain: 0.9, release: 2.5, chorusWet: 0.8,  chorusDepth: 0.9, gain: -6 },
   stab:    { osc: "square",   filter: 2500, attack: 0.01, decay: 0.2, sustain: 0.0, release: 0.2, chorusWet: 0.1,  chorusDepth: 0.2, gain: 3 },
 };
 export const HARMONY_PRESET_NAMES = Object.keys(HARMONY_PRESETS);
 
 const BASS_PRESETS = {
-  deep:   { wave: "sine",     cutoff: 500,  attack: 0.01,  decay: 0.3,  sustain: 0.7,  release: 0.3, gain: -2.5, drive: 0, detune: 0 },
+  deep:   { wave: "sine",     cutoff: 500,  attack: 0.01,  decay: 0.3,  sustain: 0.7,  release: 0.3, gain: -4, drive: 0, detune: 0 },
   bright: { wave: "sawtooth", cutoff: 2500, attack: 0.02,  decay: 0.15, sustain: 0.4,  release: 0.2, gain: -3, drive: 0.1, detune: 0 },
   pluck:  { wave: "fmsquare", cutoff: 1800, attack: 0.001, decay: 0.2,  sustain: 0.1,  release: 0.1, gain: -4.5, drive: 0.5, detune: 0 },
   sub:    { wave: "triangle", cutoff: 350,  attack: 0.05,  decay: 0.4,  sustain: 1.0,  release: 0.4, gain: -9.5, drive: 0.35, detune: 0 },
@@ -354,56 +421,192 @@ function buildGraph({ meters = false, exportGrade = false, withVerb = true, with
   const g = {};
   g.exportGrade = exportGrade;
 
-  // Master chain: gain → rumble HP → low shelf → saturation → soft clip →
-  // glue comp → makeup → soft-knee ceiling → brickwall. The goal is
-  // translation: shine on a
-  // phone AND on big Bluetooth speakers, without tuning for either at the
-  // other's expense. Two things carry the low end so it reads on both. The
-  // shelf adds a moderate +2 dB around 100 Hz — real weight for speakers that
-  // move air, but short of the boom that overwhelms a sub or muddies a laptop.
-  // And it sits BEFORE the saturation on purpose: the drive turns that low end
-  // into harmonics up at 120/180/240 Hz, so a small speaker that can't
-  // reproduce the fundamental still hears the bass implied. Same low end, heard
-  // two ways — not a big-rig boost the phone pays for.
-  // The glue at 3:1 is a bus glue, not a squash — it moves the mix as one and
-  // leaves crest for the kick to punch through. The maximizer-style ceiling
-  // (DECISIONS D7): kick transients used to overshoot the limiter by up to
-  // +10 dB and hard-clip at the DAC; now anything past the -4.4 dBFS knee
-  // saturates smoothly into a 0.98 ceiling instead — transparent below the
-  // knee, warm crack above it. The 0.25 pre-scale maps ±4 of true amplitude
-  // into the shaper's ±1 domain so overshoots land on the curve, not its
-  // clamped endpoints.
-  g.masterLimiter = new Tone.Limiter(-2).toDestination();
-  const CEIL = 0.98;
-  const KNEE = 0.6;
-  g.ceiling = new Tone.WaveShaper((x) => {
-    const a = x * 4;
+  // Master chain: bus trim → rumble HP → low shelf → saturation → DC block →
+  // soft clip → glue drive → glue → ceiling drive → ceiling → out.
+  //
+  // Read the gain structure off the constants, because for a long time you
+  // couldn't. The chain applied +19.9 dB of small-signal gain and wrote down
+  // +5.5 of it; the missing +14.4 came from the three stages above (spec
+  // makeup, an un-normalized tanh, an equal-power crossfade of two coherent
+  // paths). That hidden gain is what justified a -20 dB threshold and parked
+  // the program on the ceiling at -4.8 LUFS with a crest of 6.3 — past the
+  // loudness-war line, with no dynamic variety left to lose. Every stage here
+  // is unity at the origin by construction. The only things that move the
+  // level are the three constants that say a number out loud.
+  //
+  // The goal is translation: shine on a phone AND on big Bluetooth speakers
+  // without tuning for either at the other's expense. Two things carry the low
+  // end so it reads on both. The shelf adds a moderate +2 dB around 100 Hz —
+  // real weight for speakers that move air, but short of the boom that
+  // overwhelms a sub or muddies a laptop. And it sits BEFORE the saturation on
+  // purpose: the drive turns that low end into harmonics a small speaker CAN
+  // reproduce, so a phone hears the bass implied where it can't move the
+  // fundamental. Same low end, heard two ways — not a big-rig boost the phone
+  // pays for.
+  const MASTER_TRIM_DB = -2.5;
+  const GLUE_DRIVE_DB = 9;
+  const CEIL_DRIVE_DB = 9;
+
+  // The ceiling is the maximizer and the brickwall, and it is the whole of
+  // both. A Tone.Limiter(-2) used to sit after it: that class builds a
+  // Compressor and never passes `knee`, so it inherits Tone's 30 dB default —
+  // a "limiter" whose knee spans -17..+13 dBFS. Measured contribution: 0.02 dB,
+  // for a 6 ms lookahead and its own spec makeup. Deleted rather than tuned.
+  //
+  // Nothing here is oversampled, and that is the whole trick. A memoryless
+  // curve cannot be a true-peak limiter, so the job is to never need one:
+  //
+  //   - Un-oversampled, the curve's own bound IS the sample-peak guarantee.
+  //     The output cannot exceed CEIL, by arithmetic, on any material.
+  //   - Oversampled, it isn't. The clamp happens at 176.4 kHz and the filter
+  //     that brings it back down rings straight past it — measured at 4x, by
+  //     0 dB on sample-kit material and up to 2.4 dB on the synth kit's sharp
+  //     transients: a sample peak of +0.27 dBFS out of a stage whose curve
+  //     maxes at 0.78.
+  //   - Clamping that ringing with a hard limiter afterwards trades one
+  //     disease for the other: measured, it pinned the sample peak at exactly
+  //     -2.05 dBFS and shipped +0.91 dBTP, because a corner IS inter-sample
+  //     overs. That is the bug this chain started with.
+  //
+  // Oversampling was worth its ringing when the ceiling was being hammered by
+  // +14 dB of gain nobody wrote — that much clipping aliases badly. It isn't
+  // once the gain structure is honest and the stage does a few dB: tanh has no
+  // corner, so there is little to alias and little to land between samples.
+  // The old chain pinned every sample at -0.18 dBFS and still hit +5.1 dBTP;
+  // what fixed that was deleting the gain, not filtering the symptom. CEIL
+  // carries the remaining true-peak headroom — Bluetooth codecs, which is to
+  // say the big-speaker path of use case 2, decode to a reconstructed waveform
+  // and clip whatever is over.
+  // CEIL is the true-peak headroom, and it is set for the WORST material, not
+  // the typical. The sample kits (the default bank) are real recordings and
+  // reconstruct with ~0 dB of inter-sample overshoot, so they sit right at
+  // CEIL. The synth kits' noise-based snare and hat are another matter: even
+  // band-limited they carry ~3.5 dB of overs when a hit slams the ceiling
+  // (measured, per-voice), because a memoryless ceiling can bound samples but
+  // not what a codec reconstructs between them. Rather than penalize the sound
+  // with a lookahead limiter or lower everything to chase one voice, CEIL
+  // leaves enough room that even that 3.5 dB lands under full scale: 0.66 =
+  // -3.6 dBFS sample, and the loudness that costs (~0.5 dB) puts the program
+  // dead on the -10 LUFS of the references rather than above them. Streaming
+  // normalizes loudness anyway, so the headroom is free and the codec never
+  // clips.
+  const CEIL = 0.66;
+  const KNEE = 0.28;
+  const [ceilIn, ceilOut] = makeShaper((a) => {
     const mag = Math.abs(a);
     const out = mag < KNEE ? mag : KNEE + (CEIL - KNEE) * Math.tanh((mag - KNEE) / (CEIL - KNEE));
     return Math.sign(a) * Math.min(out, CEIL);
-  }, 4096).connect(g.masterLimiter);
-  g.ceilingScale = new Tone.Gain(0.25).connect(g.ceiling);
-  g.makeupGain = new Tone.Gain(Tone.dbToGain(8)).connect(g.ceilingScale);
-  g.glue = new Tone.Compressor({ threshold: -20, ratio: 3, attack: 0.03, release: 0.25, knee: 12 }).connect(g.makeupGain);
-  g.softClip = new Tone.WaveShaper((x) => Math.tanh(x * 1.2) / Math.tanh(1.2), 2048).connect(g.glue);
-  g.saturation = new Tone.Distortion(0.14).connect(g.softClip);
-  g.saturation.wet.value = 0.42;
+  }, 4, 8192);
+  g.ceiling = ceilIn;
+  g.ceilDrive = new Tone.Gain(Tone.dbToGain(CEIL_DRIVE_DB)).connect(g.ceiling);
+  g.masterOut = ceilOut.toDestination();
+
+  // The glue at 3:1 is a bus glue, not a squash — it moves the mix as one and
+  // leaves crest for the kick to punch through. GLUE_DRIVE_DB is how hard the
+  // mix hits it, which is the only thing that sets how much it does; the -20 dB
+  // threshold means what it says now that nothing upstream is secretly adding
+  // 9 dB before it.
+  const glue = makeComp(COMP_SPECS.glue);
+  glue.output.connect(g.ceilDrive);
+  g.glueDrive = new Tone.Gain(Tone.dbToGain(GLUE_DRIVE_DB)).connect(glue.input);
+  g.glue = glue.input;
+
+  const [clipIn, clipOut] = makeShaper((a) => Math.tanh(1.2 * a) / 1.2, 2, 2048);
+  clipOut.connect(g.glueDrive);
+  g.softClip = clipIn;
+
+  // Saturation. Two things were wrong with the old one and both were level.
+  //
+  // Tone's Distortion is an Effect, so `wet` is a CrossFade — an equal-power
+  // law, correct for two independent signals and wrong for these, which are
+  // the same signal down two paths and sum coherently. At wet = 0.42 it passed
+  // dry x 0.790 + wet x 0.613, which add to 1.40, not 1.0. On top of that
+  // Tone's distortion curve has its own slope at the origin (1.89 at drive
+  // 0.14, +5.5 dB) and a dead zone that returns 0 for |x| < 0.001 — a gate
+  // across the whole wet path below about -60 dBFS. "42% wet" was +5.8 dB.
+  //
+  // So: our own curve, our own blend. SAT_WET is a real dry/wet mix now (the
+  // paths are coherent, so they sum linearly and 0.42 means 0.42), and the
+  // curve has unity slope at the origin by construction. The saturation adds
+  // harmonics. That is all it adds.
+  //
+  // And it is ASYMMETRIC, which is what the low-shelf-into-drive trick needed
+  // all along. tanh is an odd function and odd functions make odd harmonics
+  // only: 60 Hz came out as 180 and 300 Hz with the 2nd harmonic 54 dB down
+  // (measured) — the chain's own comment claimed 120/180/240 and could not
+  // produce 120 even in principle. A small speaker reconstructs a missing
+  // fundamental from a CONSECUTIVE series, so the octave-up 2nd harmonic is
+  // the one doing the work, and it wasn't there. SAT_ASYM bends the curve so
+  // it is. The bend rides tanh(x)^2 rather than x^2 to stay bounded: x^2 turns
+  // the curve non-monotonic on loud negative peaks (it folds back), tanh(x)^2
+  // holds the derivative positive across the whole domain.
+  // SAT_DRIVE_DB is the character knob and ONLY the character knob: the same
+  // gain comes straight back off after the blend, so driving the curve harder
+  // buys harmonics and not one dB of level. That separation is the point. The
+  // old chain's "meat" was never this stage — measured, the ceiling waveshaper
+  // took -4.9 dB of crest in one pass, more than the saturation (-2.1), glue
+  // (-1.0) and soft clip (-0.6) together. The character was a slammed limiter,
+  // which is the loudness-war artifact, not the sound of a saturator. Now the
+  // saturator is driven on purpose and the ceiling is left alone to be a
+  // ceiling.
+  const SAT_WET = 0.42;
+  const SAT_DRIVE_DB = 12;
+  const SAT_ASYM = 0.35;
+  g.satTrim = new Tone.Gain(Tone.dbToGain(-SAT_DRIVE_DB)).connect(g.softClip);
+  // The DC block sits AFTER the saturation, and that placement is the whole
+  // point of it. The asymmetric curve rectifies: it puts a signal-dependent DC
+  // offset on the bus. Left there, that DC does two kinds of damage. It costs
+  // headroom — but worse, it rides into the symmetric soft clip downstream, and
+  // a symmetric nonlinearity fed an offset makes its OWN even harmonics, out of
+  // phase with the ones the saturation just made on purpose. The two cancel,
+  // and because the DC scales with level while the intended harmonic doesn't
+  // quite, the cancellation is total at one specific level: measured, 120 Hz
+  // fell into a -55 dB null at exactly -12 dBFS and climbed back out on either
+  // side of it. That was the bug — the DC block used to sit UPSTREAM of the
+  // curve, removing a DC that wasn't there yet and missing the one that was.
+  // Blocking it the moment it's made, before any symmetric stage sees it, is
+  // what leaves a clean, monotonic 2nd harmonic — the octave-up a phone speaker
+  // can actually reproduce. 18 Hz is flat to -0.5 dB at 60 and untouched at 120.
+  g.satDC = new Tone.Filter({ type: "highpass", frequency: 18, Q: 0.7 }).connect(g.satTrim);
+  g.satSum = new Tone.Gain(1).connect(g.satDC);
+  const [satIn, satOut] = makeShaper((a) => {
+    const t = Math.tanh(a);
+    return Math.tanh(a + SAT_ASYM * t * t);
+  }, 4, 4096);
+  g.satWet = new Tone.Gain(SAT_WET).connect(g.satSum);
+  satOut.connect(g.satWet);
+  g.satDry = new Tone.Gain(1 - SAT_WET).connect(g.satSum);
+  g.saturation = new Tone.Gain(Tone.dbToGain(SAT_DRIVE_DB));
+  g.saturation.connect(satIn);
+  g.saturation.connect(g.satDry);
   g.lowShelf = new Tone.Filter({ type: "lowshelf", frequency: 100, gain: 2 }).connect(g.saturation);
   // Subsonic guard: the piano roll reaches C0 (16 Hz) and the bass lane HP at
-  // 34 Hz only takes ~14 dB off it — what's left rides into the limiter as
+  // 34 Hz only takes ~14 dB off it — what's left rides into the ceiling as
   // headroom loss no speaker gives back. 18 Hz leaves a 30 Hz 808 fundamental
   // essentially untouched (≈ -0.5 dB).
   g.rumbleHP = new Tone.Filter({ type: "highpass", frequency: 18, Q: 0.7 }).connect(g.lowShelf);
-  g.master = new Tone.Gain(Tone.dbToGain(-2.5)).connect(g.rumbleHP);
+  g.master = new Tone.Gain(Tone.dbToGain(MASTER_TRIM_DB)).connect(g.rumbleHP);
 
   // Everything melodic passes through the kick-side duck; drums get a dry bus
   // plus a parallel-compressed return for weight.
+  //
+  // The dry bus is DELAYED to match. Its parallel twin runs through a
+  // compressor, which means a 6.02 ms lookahead, which means the two halves of
+  // the drum bus used to sum 6 ms apart: a comb whose first null landed at
+  // 83 Hz, straight through the kick — measured -8.9 dB at 83 Hz, costing
+  // 5.9 dB of drum-bus RMS. Parallel compression was subtracting the weight it
+  // exists to add. The same delay puts drums level with the melodic tracks,
+  // which pay the lookahead through their own input comps; before it, kick and
+  // bass were 130 degrees apart at 60 Hz on the same downbeat.
   g.musicDuck = new Tone.Gain(1).connect(g.master);
   g.drumBus = new Tone.Gain(1).connect(g.master);
-  g.drumDry = new Tone.Gain(Tone.dbToGain(-1)).connect(g.drumBus);
-  g.drumParallel = new Tone.Compressor({ threshold: -24, ratio: 4.5, attack: 0.004, release: 0.13, knee: 12 });
+  g.drumAlign = new Tone.Delay({ delayTime: COMP_LATENCY, maxDelay: 0.05 });
+  g.drumDry = new Tone.Gain(DRUM_DRY_GAIN).connect(g.drumAlign);
+  g.drumAlign.connect(g.drumBus);
+  const drumParallel = makeComp(COMP_SPECS.drumParallel);
+  g.drumParallel = drumParallel.input;
   g.drumParallelReturn = new Tone.Gain(DRUM_PARALLEL_GAIN).connect(g.drumBus);
-  g.drumParallel.connect(g.drumParallelReturn);
+  drumParallel.output.connect(g.drumParallelReturn);
 
   // Sends. Algorithmic (Freeverb) instead of convolution — far cheaper per
   // sample on a low-end mobile CPU, and fine for a send reverb. The highpass
@@ -468,7 +671,13 @@ function buildGraph({ meters = false, exportGrade = false, withVerb = true, with
   g.echoSends = {};
   g.meters = {};
   for (const k of TRACK_KEYS) {
-    g.channels[k] = new Tone.Channel({ volume: DEFAULT_TRACK_VOLUME_DB, pan: 0 });
+    // channelCount 2, because Tone.Channel defaults it to 1 and hands it to a
+    // Panner that sets channelCountMode "explicit" — so every track DOWNMIXED
+    // TO MONO at the fader. The chorus, the phaser, the tremolo's spread: 60
+    // all ran upstream of that, paying full CPU for stereo width that was
+    // summed away one node later, and paying anti-phase cancellation for the
+    // privilege. The app was mono and the effects were buying comb filtering.
+    g.channels[k] = new Tone.Channel({ volume: DEFAULT_TRACK_VOLUME_DB, pan: 0, channelCount: 2 });
     if (k === "drums") {
       g.channels[k].connect(g.drumDry);
       g.channels[k].connect(g.drumParallel);
@@ -476,9 +685,10 @@ function buildGraph({ meters = false, exportGrade = false, withVerb = true, with
       // Preset level trims land AFTER the input compressor: pre-comp (and
       // pre-drive) gain shapes tone and gets eaten by the nonlinearities,
       // so leveling there never converges. Drive for tone, trim for level.
-      g.inputs[k] = new Tone.Compressor({ threshold: -20, ratio: 4, attack: 0.005, release: 0.15, knee: 12 });
+      const input = makeComp(COMP_SPECS.input);
+      g.inputs[k] = input.input;
       g.trims[k] = new Tone.Gain(1);
-      g.inputs[k].connect(g.trims[k]);
+      input.output.connect(g.trims[k]);
       g.trims[k].connect(g.channels[k]);
       g.channels[k].connect(g.musicDuck);
     }
@@ -495,7 +705,7 @@ function buildGraph({ meters = false, exportGrade = false, withVerb = true, with
   }
   if (meters) {
     g.masterMeter = new Tone.Analyser({ type: "waveform", size: 256 });
-    g.masterLimiter.connect(g.masterMeter);
+    g.masterOut.connect(g.masterMeter);
   }
 
   // Color insert points: everything a track makes flows through colorIn, and
@@ -587,15 +797,30 @@ function buildGraph({ meters = false, exportGrade = false, withVerb = true, with
   // oscillators made the most-triggered voice the priciest drum in the kit.
   g.kickFilter = new Tone.Filter({ type: "lowpass", frequency: 1800, Q: 0.5 }).connect(g.colorIn.drums);
   g.kick = new Tone.MembraneSynth({ volume: SOURCE_LEVEL_DB.kick }).connect(g.kickFilter);
-  g.snareFilter = new Tone.Filter({ type: "highpass", frequency: 950 }).connect(g.colorIn.drums);
+  // The synth snare is white noise with a highpass and nothing else, so it ran
+  // flat all the way to Nyquist — and near-Nyquist energy is precisely where
+  // inter-sample overs are made. Measured per voice through the master, this
+  // one carried 4.3 dB of ISP against the sample kits' 0.7, and on its own it
+  // took a mix whose every sample sat at -2.9 dBFS up to +0.8 dBTP. A real
+  // snare has nothing up at 20 kHz, no phone or Bluetooth speaker reproduces
+  // it, and the codecs in between clip on it: it was pure liability. -24 dB/oct
+  // from 12 kHz leaves the crack alone and takes 24 kHz down by 24 dB.
+  g.snareTone = new Tone.Filter({ type: "lowpass", frequency: 12000, rolloff: -24, Q: 0.7 }).connect(g.colorIn.drums);
+  g.snareFilter = new Tone.Filter({ type: "highpass", frequency: 950 }).connect(g.snareTone);
   g.snare = new Tone.NoiseSynth({ noise: { type: "white" }, volume: SOURCE_LEVEL_DB.snare }).connect(g.snareFilter);
-  g.hatFilter = new Tone.Filter({ type: "highpass", frequency: 7500 }).connect(g.colorIn.drums);
+  // Same story as the snare, milder only because the hat is quieter: white
+  // noise with a highpass runs to Nyquist. 16 kHz is above every kit's morphed
+  // resonance (4-9 kHz), so this takes the ultrasonics and leaves the sizzle.
+  g.hatTone = new Tone.Filter({ type: "lowpass", frequency: 16000, rolloff: -24, Q: 0.7 }).connect(g.colorIn.drums);
+  g.hatFilter = new Tone.Filter({ type: "highpass", frequency: 7500 }).connect(g.hatTone);
   g.hat = new Tone.NoiseSynth({ noise: { type: "white" }, envelope: { attack: 0.001, decay: 0.02, sustain: 0 }, volume: SOURCE_LEVEL_DB.hat }).connect(g.hatFilter);
   g.clapFilter = new Tone.Filter({ type: "bandpass", frequency: 1400, Q: 1.2 }).connect(g.colorIn.drums);
   g.clap = new Tone.NoiseSynth({ noise: { type: "pink" }, volume: SOURCE_LEVEL_DB.clap }).connect(g.clapFilter);
 
   return g;
 }
+
+if (typeof window !== "undefined") window.__noodlesGraph = buildGraph;
 
 // --- Patch appliers, parameterized by graph so live and offline share them.
 function setTrim(g, track, db, ramp, at) {
@@ -605,9 +830,19 @@ function setTrim(g, track, db, ramp, at) {
 
 // The output node carries ONLY the morph weight: the track source level is
 // baked into the voices at construction (PolySynth constructor volume →
-// voices; .volume writes → output node; they stack). sqrt(weight) amplitude
-// = equal power across the pad; 10*log10(w) in dB.
-const layerDb = (w) => 10 * Math.log10(Math.max(w, 1e-4));
+// voices; .volume writes → output node; they stack).
+//
+// The weight is the AMPLITUDE, not the square root of it. Equal-power weights
+// (sqrt(w)) are the right law for two independent signals, and these are not
+// independent: every layer is an oscillator at the same pitch, and Tone starts
+// a voice's oscillator at phase 0 on the note's attack, so the layers are
+// phase-locked and their fundamentals sum coherently. Amplitude adds, power
+// doesn't — sqrt(0.5) + sqrt(0.5) = 1.41, so the pad's midpoint came out
+// +3 dB hot (measured: bass +3.29 dB at the edge midpoint). Since
+// activeLayerWeights renormalizes the kept weights to sum to 1, linear weights
+// sum to exactly unity amplitude anywhere on the pad. The sample bank keeps
+// equal power for the opposite reason — see hitDrumOn.
+const layerDb = (w) => 20 * Math.log10(Math.max(w, 1e-4));
 
 function applyMorphTo(g, track, patch, { ramp = false, at } = {}) {
   const table = Object.values(PRESET_TABLES[track]);
@@ -842,6 +1077,11 @@ function hitDrumOn(g, patches, v, time, vel = 0.9) {
       const kit = SAMPLE_KIT_NAMES[i];
       const buffer = sampleBuffers[kit]?.[v];
       if (!buffer) continue;
+      // sqrt(w) — equal power — and here it is the right law, unlike the synth
+      // layers' (see layerDb). These are four different recordings of a drum;
+      // they share an onset but not a waveform, so they sum in power, not in
+      // amplitude. Measured: the sample bank's midpoint lands 0.06 dB off its
+      // corner mean under this law, which is as flat as the pad gets.
       playSampleHit(g, buffer, v, time, vel * Math.sqrt(w) * Tone.dbToGain(SAMPLE_KITS[kit].gain));
       played = true;
     }
@@ -941,12 +1181,19 @@ function playArrangementStepOn(g, patches, vstate, song, bar, stepInBar, time) {
 export function createAudio(song) {
   // Favor throughput over latency on weak mobile CPUs — a bigger buffer absorbs
   // CPU jitter and prevents xruns. Must be set before any node is created.
-  // sampleRate 44100: most Androids default to 48 k, which is ~8% more DSP for
-  // the identical sound plus a resample of our 44.1 k drum one-shots; a 44.1 k
-  // context plays them bit-exact and the OS resamples the output for free.
   // lookAhead 0.25: scheduling runs on the main thread, and on little cores a
   // janky frame at 0.1 s of headroom becomes an audible gap — more headroom
   // costs nothing audible (interactive previews still fire at now).
+  //
+  // The rate is the hardware's, which is 48 k almost everywhere (measured, npm
+  // run audit — the `rate` field). This comment used to claim it pinned 44100
+  // to play the 44.1 k drum one-shots bit-exact and save ~8% of the DSP, and it
+  // never did: Tone.Context takes no sampleRate option — it forwards only
+  // latencyHint to createAudioContext — so the option was accepted and dropped.
+  // Pinning it for real means building a native AudioContext({sampleRate}) and
+  // handing it in, which steps outside the standardized-audio-context wrapper
+  // Tone leans on for cross-browser param behaviour. That's a live fork, not an
+  // oversight; until it's decided, this says what the code does.
   const context = new Tone.Context({ latencyHint: "playback", lookAhead: 0.25 });
   Tone.setContext(context);
   // setContext swaps the active context, so the clock loop below binds to the
