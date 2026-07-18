@@ -1164,6 +1164,7 @@ function closeEditor() {
   editor = null;
   cancelAnimationFrame(mixerRAF);
   mixerRAF = 0;
+  audio.setMetersActive(false); // park the analyser taps with the meter loop
   audio.disarmMotion();
   scrim.classList.remove("open");
   sheet.classList.remove("open");
@@ -1176,6 +1177,7 @@ function resetSheet(color) {
   editor = null;
   cancelAnimationFrame(mixerRAF);
   mixerRAF = 0;
+  audio.setMetersActive(false); // park the analyser taps with the meter loop
   sheet.innerHTML = "";
   sheet.classList.remove("snd"); // sound-sheet sizing mode, set by openSoundSheet
   sheet.style.setProperty("--tc", color);
@@ -1706,6 +1708,7 @@ function openMixer(focusTrack = null) {
     setTimeout(() => sheet.querySelector(`.mx-strip[data-track="${focusTrack}"]`)?.scrollIntoView({ inline: "center", block: "nearest" }), 30);
   }
   updateTrackMixUI();
+  audio.setMetersActive(true); // wake the analyser taps for the visible meters
   const tick = () => {
     const now = performance.now();
     for (const t of TRACKS) advanceMeter(meterBars[t.key], audio.meterLevels(t.key), now);

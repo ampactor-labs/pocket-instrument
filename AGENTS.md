@@ -151,8 +151,13 @@ compensated against the audio clock) → `onVisual`. Public API:
 `enterArrangement`, `setTempo`/`setSwing`, `preview`/`previewHit`/`previewNote`, mixer
 `setVol`/`setPan`/`setSend`/`setEcho`/`setMute`/`setSolo`/`meter`, preset getters/setters
 per track, `onVisual`, and `renderOffline(soloTrack)`. Context is created with
-`latencyHint:"playback"` and `lookAhead: 0.25` — scheduling runs on the main thread, and on
-little cores a janky frame under 0.1 s of headroom becomes an audible gap. Don't wrap a
+`latencyHint:"playback"`, `lookAhead: 0.25`, and `updateInterval: 0.05` (pinned — Tone
+otherwise derives it as lookAhead/2 and the scheduler tick quietly coarsens to 125 ms) —
+scheduling runs on the main thread, and on little cores a janky frame under 0.1 s of
+headroom becomes an audible gap. The lookAhead is for the transport only: interactive
+triggers (previews, pad rides, stop) schedule at the immediate clock via `tapTime()`,
+because `Tone.now()` adds the lookAhead and a quarter-second-late tap reads as a broken
+instrument. Don't wrap a
 custom-sampleRate native AudioContext in Tone.Context: it throws stackless
 InvalidStateErrors somewhere inside Tone (tried for the 48k→44.1k saving, reverted).
 

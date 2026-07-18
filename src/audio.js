@@ -44,7 +44,11 @@ export const MELODIC_TRACKS = ["harmony", "bass", "melody"];
 
 const DEFAULT_TRACK_VOLUME_DB = -6;
 const SEND_OFF_DB = -60;
-const PLAY_START_LEAD_TIME = "+0.18";
+// Relative to Tone.now(), which already includes the 0.25 s lookAhead — the
+// press-to-first-sound total is lookAhead + this. 0.1 keeps the first tick
+// ≥300 ms of scheduling room under the 50 ms ticker (was 0.18 when the ticker
+// ran at 125 ms and needed the extra margin).
+const PLAY_START_LEAD_TIME = "+0.1";
 
 // --- Dynamics, with the gain nobody wrote taken back out ------------------
 //
@@ -67,6 +71,24 @@ const COMP_SPECS = {
 // Every path into the master is delayed to this, and the kick duck is
 // scheduled against it, so the graph sums in phase.
 const COMP_LATENCY = 0.00602;
+
+// Tone's PolySynth runs a per-second GC that prunes one idle voice whenever
+// the pool exceeds its running average of active voices — which, on a sparse
+// lane (most melodies, every gap between chords), tears voices down between
+// phrases and rebuilds them on the next trigger: main-thread Synth
+// construction plus native-node disposal, forever, across all twelve layer
+// synths. That churn is GC-pause food on a phone. Voices are already capped
+// at maxPolyphony (4-5) and an idle voice's sources are stopped (a silent
+// subtree costs ~nothing on the audio thread), so a warm pool trades a few
+// dormant nodes for zero mid-jam churn. Guarded against Tone internals
+// moving: if the private handle isn't there, this no-ops and the stock GC
+// keeps running.
+function disableVoiceGC(synth) {
+  if (typeof synth._gcTimeout === "number" && synth._gcTimeout !== -1) {
+    synth.context.clearInterval(synth._gcTimeout);
+    synth._gcTimeout = -1;
+  }
+}
 
 // A compressor that only compresses.
 function makeComp(spec) {
@@ -746,6 +768,7 @@ function buildGraph({ meters = false, exportGrade = false, withVerb = true, with
         volume: srcDb,
       }).connect(dest);
       if ((p.osc || p.wave) === "fmsquare") synth.set({ oscillator: { modulationType: "sawtooth", harmonicity: 0.5, modulationIndex: 2 } });
+      disableVoiceGC(synth);
       return synth;
     });
 
@@ -1048,13 +1071,22 @@ function playSampleHit(g, buffer, voice, time, gain) {
   // Per-hit nodes must bind to the GRAPH's context, not the ambient one:
   // Tone.Offline restores the live context before rendering runs, so nodes
   // created inside render callbacks would otherwise land cross-context.
-  const context = g.sampleGains[voice].context;
-  const src = new Tone.ToneBufferSource({ context, url: buffer });
-  const level = new Tone.Gain({ context, gain }).connect(g.sampleGains[voice]);
+  //
+  // Raw context nodes, not Tone wrappers: a ToneBufferSource + Tone.Gain per
+  // hit is two full Tone objects constructed and disposed per drum hit —
+  // 10-30 a second on a dense groove, steady allocation the phone's GC
+  // eventually collects mid-jam. These carry no Tone params or timelines;
+  // the graph edges and the sound are identical.
+  const ctx = g.sampleGains[voice].context.rawContext;
+  const src = ctx.createBufferSource();
+  src.buffer = buffer.get();
+  const level = ctx.createGain();
+  level.gain.value = gain;
   src.connect(level);
+  level.connect(g.sampleGains[voice].input);
   src.onended = () => {
-    src.dispose();
-    level.dispose();
+    src.disconnect();
+    level.disconnect();
   };
   src.start(time);
 }
@@ -1183,7 +1215,9 @@ export function createAudio(song) {
   // CPU jitter and prevents xruns. Must be set before any node is created.
   // lookAhead 0.25: scheduling runs on the main thread, and on little cores a
   // janky frame at 0.1 s of headroom becomes an audible gap — more headroom
-  // costs nothing audible (interactive previews still fire at now).
+  // costs nothing audible NOW that interactive triggers bypass it (tapTime
+  // below): for a long time "previews fire at now" was believed and false —
+  // Tone.now() adds the lookAhead, so every tap sounded a quarter second late.
   //
   // The rate is the hardware's, which is 48 k almost everywhere (measured, npm
   // run audit — the `rate` field). This comment used to claim it pinned 44100
@@ -1194,7 +1228,12 @@ export function createAudio(song) {
   // handing it in, which steps outside the standardized-audio-context wrapper
   // Tone leans on for cross-browser param behaviour. That's a live fork, not an
   // oversight; until it's decided, this says what the code does.
-  const context = new Tone.Context({ latencyHint: "playback", lookAhead: 0.25 });
+  // updateInterval is pinned: Tone's lookAhead setter otherwise derives it as
+  // lookAhead/2, silently coarsening the scheduler's worker tick from 20 Hz
+  // (Tone's default 0.05) to 8 Hz. The tick is what refills the scheduling
+  // window after a main-thread stall — at 125 ms a recovering scheduler could
+  // burn half the 0.25 s armor just waiting for its next tick.
+  const context = new Tone.Context({ latencyHint: "playback", lookAhead: 0.25, updateInterval: 0.05 });
   Tone.setContext(context);
   // setContext swaps the active context, so the clock loop below binds to the
   // NEW context's transport. The deprecated Tone.Transport / Tone.Draw globals
@@ -1249,7 +1288,33 @@ export function createAudio(song) {
     if (!visualRAF) visualRAF = requestAnimationFrame(pumpVisuals);
   };
 
+  // Tone.now() is currentTime + lookAhead: right for transport scheduling,
+  // wrong for a finger. Every interactive trigger — previews, pad rides,
+  // stop — used to fire at now() and land a quarter second after the tap on
+  // every device. Interactive events fire against the real clock instead; a
+  // 5 ms nudge gives ramps a clean start point. (Web Audio clamps a
+  // just-past start to "as soon as possible", so this can never drop a note.)
+  const tapTime = () => Tone.immediate() + 0.005;
+
   const live = buildGraph({ meters: true });
+
+  // Meter park: five waveform analysers tap the strips full-time, but their
+  // buffers are only ever read while the mixer sheet is open. An analyser is
+  // a pure tap — never in the signal path — so disconnecting it takes its
+  // per-quantum copy off the audio thread and changes nothing else. The
+  // mixer open/close drives this.
+  let metersActive = true;
+  const meterTaps = [
+    ...TRACK_KEYS.map((k) => [k === "drums" ? live.drumBus : live.channels[k], live.meters[k]]),
+    [live.masterOut, live.masterMeter],
+  ];
+  function setMetersActive(on) {
+    if (!!on === metersActive) return;
+    metersActive = !!on;
+    for (const [src, tap] of meterTaps) metersActive ? src.connect(tap) : src.disconnect(tap);
+  }
+  setMetersActive(false); // boot state: the mixer sheet is closed
+
   loadSamples();
   const patches = Object.fromEntries(TRACK_KEYS.map((t) => [t, defaultPatch(t)]));
   for (const t of TRACK_KEYS) applyPatchTo(live, t, patches[t]);
@@ -1378,8 +1443,9 @@ export function createAudio(song) {
     wakeTrack("harmony");
     const voiced = voiceLead(CHORDS[ci].pcs, liveVoice.prev);
     const shift = 12 * oct;
-    eachActiveLayer(live, "harmony", patches.harmony, (layer) => layer.triggerAttackRelease(voiced.map((m) => midiToFreq(m + shift)), "2n", Tone.now()));
-    live.sub.triggerAttackRelease(midiToFreq(48 + CHORDS[ci].pcs[0]), "2n", Tone.now());
+    const at = tapTime();
+    eachActiveLayer(live, "harmony", patches.harmony, (layer) => layer.triggerAttackRelease(voiced.map((m) => midiToFreq(m + shift)), "2n", at));
+    live.sub.triggerAttackRelease(midiToFreq(48 + CHORDS[ci].pcs[0]), "2n", at);
   }
 
   // Transport.
@@ -1647,16 +1713,20 @@ export function createAudio(song) {
       playing = true;
     },
     stop() {
-      transport.pause();
+      // Pause and release at the immediate clock: transport.pause() and
+      // Tone.now() both add the 0.25 s lookAhead, which made every pause land
+      // a quarter second after the press — the opposite of "feels instant".
+      const at = tapTime();
+      transport.pause(at);
       playing = false;
       // Immediately silence all voices so pause feels instant
       for (const t of MELODIC_TRACKS) {
         for (const layer of live.layers[t]) {
-          try { layer.releaseAll(Tone.now()); } catch {}
+          try { layer.releaseAll(at); } catch {}
         }
       }
-      try { live.halo.triggerRelease(Tone.now()); } catch {}
-      try { live.sub.triggerRelease(Tone.now()); } catch {}
+      try { live.halo.triggerRelease(at); } catch {}
+      try { live.sub.triggerRelease(at); } catch {}
       liveVoice.prev = null;
       parkContextSoon();
       for (const track of TRACK_KEYS) queuedTracks[track] = -1; // clear queues on stop
@@ -1724,11 +1794,11 @@ export function createAudio(song) {
     },
     previewHit(v) {
       wakeContext();
-      hitDrum(v, Tone.now());
+      hitDrum(v, tapTime());
     },
     previewNote(track, midi) {
       wakeContext();
-      playNoteStack(track, [{ midi, len: 1, vel: 0.9 }], Tone.now());
+      playNoteStack(track, [{ midi, len: 1, vel: 0.9 }], tapTime());
     },
     // --- mixer ---
     setVol(track, db) {
@@ -1742,13 +1812,13 @@ export function createAudio(song) {
     setSend(track, db) {
       channelState[track].verb = db;
       if (sendGain(db) > 0) wakeReturn("verb"); // reconnect BEFORE the gain opens
-      live.verbSends[track].gain.rampTo(sendGain(db), 0.02);
+      live.verbSends[track].gain.rampTo(sendGain(db), 0.02, tapTime());
       if (!anySendOn("verb")) parkReturnSoon("verb");
     },
     setEcho(track, db) {
       channelState[track].echo = db;
       if (sendGain(db) > 0) wakeReturn("echo");
-      live.echoSends[track].gain.rampTo(sendGain(db), 0.02);
+      live.echoSends[track].gain.rampTo(sendGain(db), 0.02, tapTime());
       if (!anySendOn("echo")) parkReturnSoon("echo");
     },
     setMute(track, on) {
@@ -1788,16 +1858,18 @@ export function createAudio(song) {
         // Splicing a different insert mid-stream clicks; duck the junction for
         // the swap. ~45 ms of dip on a deliberate sound-design tap is free.
         const junction = live.colorIn[track].gain;
-        junction.rampTo(0, 0.012);
+        junction.rampTo(0, 0.012, tapTime());
         setTimeout(() => {
-          applyPatchTo(live, track, patches[track], { ramp: true });
+          applyPatchTo(live, track, patches[track], { ramp: true, at: tapTime() });
           // The rewire reconnected the junction — keep the park flag honest
           // or the sweep would never re-park (and wake would double-connect).
           trackParked[track] = false;
-          junction.rampTo(1, 0.03);
+          junction.rampTo(1, 0.03, tapTime());
         }, 18);
       } else {
-        applyPatchTo(live, track, patches[track], { ramp: true });
+        // at tapTime, not the ramp default of now(): a finger on the XY pad
+        // must not trail the gesture by the lookAhead.
+        applyPatchTo(live, track, patches[track], { ramp: true, at: tapTime() });
       }
       return { ...patches[track] };
     },
@@ -1816,6 +1888,7 @@ export function createAudio(song) {
       this.setPatch("drums", { bank, x: i % 2, y: Math.floor(i / 2) });
     },
     samplesReady: () => samplesReady,
+    setMetersActive,
     setSyncNudge(ms) {
       syncNudge = Math.max(-0.25, Math.min(0.25, (Number(ms) || 0) / 1000));
     },

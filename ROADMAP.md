@@ -50,12 +50,33 @@ writes quantized (0.5% pies, ¼-px playhead) and skipped when unchanged, so pies
 every frame or two instead of sixty times a second. Sound-neutral only, per the standing
 rule: no quality or capability trades.
 
-Remaining, in honesty: the always-on chain while PLAYING (Freeverb combs, chorus, five
+The 2026-07-18 pass went after "choppy and laggy even on decent phones," and the findings
+were main-thread, not DSP. The laggy half was arithmetic: Tone's `now()` adds the 0.25 s
+lookAhead, so every interactive trigger — chord preview, drum pad, note audition, XY-pad
+ride, even the stop button — sounded a quarter second after the finger, on every device,
+while the code's own comment claimed previews "fire at now." Interactive paths now schedule
+at the immediate clock (`tapTime()` in audio.js), and the play lead dropped +0.18 → +0.1.
+The choppy half was churn and a slow scheduler tick: Tone silently derives `updateInterval`
+as lookAhead/2, so the worker tick that refills the scheduling window after a jank ran at
+125 ms instead of Tone's own 50 ms default (now pinned back); Tone's PolySynth GC disposes
+an idle voice every second under its running active-average and rebuilds it on the next
+trigger — perpetual Synth construction across all twelve layer synths on any sparse lane
+(disabled; the pool is already capped at maxPolyphony 4-5 and idle voices are silent
+subtrees); and every sample drum hit built and disposed two full Tone objects (raw context
+nodes now). Receipt over an identical 75 s sparse-scene playback (.tmp/perf-churn-long.mjs):
+base build 866 Tone buffer-source constructions and 2 mid-jam voice disposals; new build 0
+and 0, warmup constructions identical. The five meter analysers also park while the mixer
+sheet is closed.
+
+Remaining, in honesty: the always-on chain while PLAYING (verb combs, chorus, five
 compressors, master stack) is the floor and it IS the sound — shrinking it means a measured
 device tier that makes weak phones sound different from the export, a fork the builder must
-call. Tier-2 render items still open: diff-based `paint()`/`refreshClip`, `color-mix()`
-precompute, snapshot-undo only on committed change. A 44.1 kHz context (~8% on 48 k phones)
-was tried and reverted — Tone throws wrapping custom-rate contexts (see AGENTS.md).
+call (D10 chose the uniform grade split instead). Tier-2 render items still open: diff-based
+`paint()`/`refreshClip`, `color-mix()` precompute, snapshot-undo only on committed change —
+they matter to playback now mainly as main-thread stall sources during a mid-jam dice roll
+or sheet open, since a stall past the 0.25 s lookAhead is an audible gap. A 44.1 kHz context
+(~8% on 48 k phones) was tried and reverted — Tone throws wrapping custom-rate contexts (see
+AGENTS.md).
 
 **On-device: run the production build, not the dev server** — `npm run build && npm run
 preview -- --host`. The dev server ships unbundled ESM + unminified Tone.js; on the A55
