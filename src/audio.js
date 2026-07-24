@@ -1872,7 +1872,18 @@ export function createAudio(song) {
       return mode;
     },
     setTempo(bpm) {
-      transport.bpm.rampTo(bpm, 0.1);
+      // refreshAll re-pushes the tempo on every undo/key-change/roll; a
+      // same-value set would still append a permanent tick event.
+      if (Math.abs(transport.bpm.value - bpm) < 0.001) return;
+      // A direct set, not rampTo(0.1): rampTo goes through setTargetAtTime,
+      // which TickParam approximates as ~60 linear-ramp events per call —
+      // Tone-side AND native — and the transport's tick timeline keeps its
+      // events FOREVER (Timeline(Infinity), by design: tick math integrates
+      // history). Measured: one BPM drag deposited ~48 permanent events and
+      // every dice roll 4 more, growth that never gets collected. A drag
+      // moves 1-2 BPM per pointermove, so stepping is inaudible; the direct
+      // set writes one event per change.
+      transport.bpm.value = bpm;
       syncEcho(bpm);
       // Tempo-synced colors (trem/wob) chase the new grid.
       for (const t of TRACK_KEYS) updateColorNode(live, t, patches[t]);
