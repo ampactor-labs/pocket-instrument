@@ -130,9 +130,13 @@ chain, uniformly on every device; everything feel-bearing is identical in both g
 `Tone.Channel` (drums skip the per-track input compressor; they already get parallel
 compression), reverb + echo sends whose returns ride the kick-sidechain duck along with
 everything melodic (a wet tail must pump with the dry mix, not fill the pocket), a drum bus
-with a parallel compressor, and a master section (gain → 18 Hz rumble HP → +2 dB low shelf
-at 100 → saturation → soft clip → glue compressor → +8 dB makeup → soft-knee ceiling →
-limiter at -2). Harmony = saw pad (the LFO owns its filter
+with a parallel compressor, and a master section (trim → 18 Hz rumble HP → +2 dB low shelf
+at 100 → asymmetric saturation blend → DC block → soft clip → glue drive → glue compressor →
+ceiling drive → soft-knee ceiling; every stage unity at the origin — `npm run audit` is the
+gate and the constants in audio.js carry their measurements). The bus is editable like a
+track device: tapping the Master strip in the mixer opens a four-knob editor
+(level/juice/weight/glue over `audio.setMaster`), defaults equal the compiled constants,
+edits render in exports and ride project save/load. Harmony = saw pad (the LFO owns its filter
 cutoff, because a signal connected to a param overrides it; presets rescale the LFO range)
 + mono halo + a highpassed root hint; bass and lead are PolySynths behind drive/filters; the
 kit is MembraneSynth kick + filtered-noise snare/hat/clap. Each track's device is a

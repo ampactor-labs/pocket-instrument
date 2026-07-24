@@ -350,6 +350,10 @@ try {
     return echoed;
   });
   assertState(Math.abs(masterRound.juice - 0.8) < 1e-6 && masterRound.level === -3, `setMaster did not echo (${JSON.stringify(masterRound)})`);
+  // An outside tap on a DIFFERENT view's button closes the sheet (the scrim
+  // rule); the next tap opens it. Only the same-view button is a no-op.
+  await tap(page, ".arr-corner .view-mix");
+  await page.waitForFunction(() => !document.querySelector("#sheet")?.classList.contains("open"));
   await tap(page, ".arr-corner .view-mix");
   await page.waitForFunction(() => document.querySelector(".sheet-bar .title")?.textContent === "Mixer");
   await tap(page, ".tbtn.play");
