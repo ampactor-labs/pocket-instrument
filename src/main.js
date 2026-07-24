@@ -26,7 +26,7 @@ import {
   makeMagicScene,
   stepsFor,
 } from "./model.js";
-import { createAudio, KIT_NAMES, SAMPLE_KIT_NAMES, HARMONY_PRESET_NAMES, BASS_PRESET_NAMES, MELODY_PRESET_NAMES, CORNERS, colorNamesFor, DRUM_BANKS, drumCornerNames } from "./audio.js";
+import { createAudio, KIT_NAMES, SAMPLE_KIT_NAMES, HARMONY_PRESET_NAMES, BASS_PRESET_NAMES, MELODY_PRESET_NAMES, CORNERS, colorNamesFor, DRUM_BANKS, drumCornerNames, MASTER_DEFAULTS } from "./audio.js";
 
 // Pitch range shown in the piano roll, per track.
 const PIANO = { melody: { base: 12, rows: 56 }, bass: { base: 12, rows: 56 } };
@@ -1676,9 +1676,10 @@ function openMixer(focusTrack = null) {
     const echoSlider = knob("echo", -30, 0, 1, ms.echo, (v) => { ms.echo = v; audio.setEcho(k, v); });
 
     // One path to the device: the sound sheet. The old preset dropdowns were
-    // a third, flattened way to pick corners the pad already owns.
+    // a third, flattened way to pick corners the pad already owns, and the
+    // corner-name label above this button was a fourth — dropped too; the
+    // sound page itself shows where the patch sits.
     const devSection = el("div", { class: "mx-dev-section" }, [
-      el("div", { class: "mx-devlabel", text: audio.kit && k === "drums" ? `kit · ${audio.kit()}` : `sound · ${k === "harmony" ? audio.harmonyPreset() : k === "bass" ? audio.bassPreset() : audio.melodyPreset()}` }),
       el("div", { class: "mx-sound", text: "✦ sound", "data-action": `sound-${k}`, onclick: () => openSoundSheet(k) }),
     ]);
 
@@ -1694,12 +1695,21 @@ function openMixer(focusTrack = null) {
     ]);
     container.appendChild(strip);
   }
-  const masterState = {};
-  meterBars.master = masterState;
+  const masterMeterState = {};
+  meterBars.master = masterMeterState;
+  // The master strip is a door, same interaction as a track's parameters:
+  // tap the meter (or the name) and the mix bus editor opens.
   container.appendChild(
-    el("div", { class: "mx-strip mx-master", style: "--tc:#d2d2d4", "data-track": "master" }, [
-      el("div", { class: "mx-name" }, [el("span", { class: "mx-dot" }), el("span", { text: "Master" })]),
-      makeVolMeter(masterState),
+    el("div", {
+      class: "mx-strip mx-master",
+      style: "--tc:#d2d2d4",
+      "data-track": "master",
+      role: "button",
+      "data-action": "master-open",
+      onclick: openMasterSheet,
+    }, [
+      el("div", { class: "mx-name" }, [el("span", { text: "Master" })]),
+      makeVolMeter(masterMeterState),
     ])
   );
   sheet.appendChild(container);
@@ -1718,6 +1728,51 @@ function openMixer(focusTrack = null) {
   };
   cancelAnimationFrame(mixerRAF);
   mixerRAF = requestAnimationFrame(tick);
+}
+
+// ---------------------------------------------------------------------------
+// Master sheet — the mix bus, editable like a track device. Four knobs over
+// the chain's own levers (audio.setMaster), defaults equal the compiled
+// character, and exports render whatever is set here.
+// ---------------------------------------------------------------------------
+function openMasterSheet() {
+  resetSheet("#d2d2d4");
+  sheet.appendChild(sheetBar("Master", "the mix bus"));
+  const body = el("div", { class: "editor-scroll" });
+  sheet.appendChild(body);
+  const m = audio.master();
+  const dbFmt = (v) => `${v > 0 ? "+" : ""}${Math.round(v)}`;
+  const pctFmt = (v) => `${Math.round(v * 100)}%`;
+  const masterKnob = (name, min, max, step, val, fmt) => {
+    const k = knob(name, min, max, step, val, (v) => audio.setMaster({ [name]: v }), fmt);
+    k.dataset.action = `master-${name}`;
+    return k;
+  };
+  body.appendChild(
+    el("div", { class: "propsection" }, [
+      el("div", { class: "proplabel", text: "level · juice · weight · glue" }),
+      el("div", { class: "knobrow" }, [
+        masterKnob("level", -12, 6, 1, m.level, dbFmt),
+        masterKnob("juice", 0, 1, 0.01, m.juice, pctFmt),
+        masterKnob("weight", 0, 1, 0.01, m.weight, pctFmt),
+        masterKnob("glue", 0, 1, 0.01, m.glue, pctFmt),
+      ]),
+    ])
+  );
+  body.appendChild(
+    el("div", { class: "tfrow" }, [
+      el("div", {
+        class: "tfbtn",
+        text: "Reset",
+        "data-action": "master-reset",
+        onclick: () => {
+          audio.setMaster({ ...MASTER_DEFAULTS });
+          openMasterSheet();
+        },
+      }),
+    ])
+  );
+  openSheet();
 }
 
 // ---------------------------------------------------------------------------
@@ -3113,7 +3168,10 @@ function projectDevices() {
 }
 
 function projectMix() {
-  return Object.fromEntries(TRACKS.map((t) => [t.key, structuredClone(mixState[t.key])]));
+  return {
+    ...Object.fromEntries(TRACKS.map((t) => [t.key, structuredClone(mixState[t.key])])),
+    master: audio.master(),
+  };
 }
 
 function captureProject() {
@@ -3170,6 +3228,9 @@ function restoreMix(mix = {}) {
     };
     Object.assign(mixState[key], parsed);
   }
+  // The master bus rides the mix: absent in the file (older saves) means the
+  // compiled defaults, never whatever this session had dialed in.
+  audio.setMaster({ ...MASTER_DEFAULTS, ...(mix.master || {}) });
   applyMixState();
 }
 

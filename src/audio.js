@@ -635,6 +635,9 @@ function buildGraph({ meters = false, exportGrade = false, withVerb = true, with
   // essentially untouched (≈ -0.5 dB).
   g.rumbleHP = new Tone.Filter({ type: "highpass", frequency: 18, Q: 0.7 }).connect(g.lowShelf);
   g.master = new Tone.Gain(Tone.dbToGain(MASTER_TRIM_DB)).connect(g.rumbleHP);
+  // applyMasterTo edits the bus around these constants; the trim rides along
+  // so the master level knob offsets it instead of replacing it.
+  g.masterTrimDb = MASTER_TRIM_DB;
 
   // Everything melodic passes through the kick-side duck; drums get a dry bus
   // plus a parallel-compressed return for weight.
@@ -871,6 +874,44 @@ function buildGraph({ meters = false, exportGrade = false, withVerb = true, with
 }
 
 if (typeof window !== "undefined") window.__noodlesGraph = buildGraph;
+
+// --- The master bus as a patch: the mix bus's four levers, editable like a
+// track's device and applied by the same live/offline discipline (buildGraph
+// stays the one chain; this only moves the constants it already has). The
+// defaults ARE the compiled character — a fresh song sounds exactly like the
+// chain's constants say, and npm run audit still measures the default state.
+// level drives the whole mix into the chain (the compression character moves
+// with it); juice is the saturator's drive, level-compensated so it stays a
+// character knob; weight is the low shelf; glue is how hard the mix leans on
+// the bus compressor.
+export const MASTER_DEFAULTS = { level: 0, juice: 0.5, weight: 0.5, glue: 0.5 };
+const MASTER_LEVEL_MIN_DB = -12;
+const MASTER_LEVEL_MAX_DB = 6;
+const masterJuiceDb = (v) => 8 + v * 12; // 0.5 = the compiled SAT_DRIVE_DB 14
+const masterWeightDb = (v) => v * 4; // 0.5 = the compiled +2 dB shelf
+const masterGlueDb = (v) => 3 + v * 12; // 0.5 = the compiled GLUE_DRIVE_DB 9
+
+function normalizeMaster(raw = {}) {
+  const m = { ...MASTER_DEFAULTS, ...raw };
+  m.level = Math.max(MASTER_LEVEL_MIN_DB, Math.min(MASTER_LEVEL_MAX_DB, Number(m.level) || 0));
+  m.juice = clamp01(m.juice);
+  m.weight = clamp01(m.weight);
+  m.glue = clamp01(m.glue);
+  return m;
+}
+
+function applyMasterTo(g, m, { ramp = false, at } = {}) {
+  const set = (param, value) => {
+    if (ramp) param.rampTo(value, 0.03, at);
+    else param.value = value;
+  };
+  set(g.master.gain, Tone.dbToGain(g.masterTrimDb + m.level));
+  const juice = masterJuiceDb(m.juice);
+  set(g.saturation.gain, Tone.dbToGain(juice));
+  set(g.satTrim.gain, Tone.dbToGain(-juice));
+  set(g.lowShelf.gain, masterWeightDb(m.weight));
+  set(g.glueDrive.gain, Tone.dbToGain(masterGlueDb(m.glue)));
+}
 
 // --- Patch appliers, parameterized by graph so live and offline share them.
 function setTrim(g, track, db, ramp, at) {
@@ -1347,6 +1388,9 @@ export function createAudio(song) {
   loadSamples();
   const patches = Object.fromEntries(TRACK_KEYS.map((t) => [t, defaultPatch(t)]));
   for (const t of TRACK_KEYS) applyPatchTo(live, t, patches[t]);
+  // The master bus's own patch. Defaults equal the compiled chain, so a graph
+  // built fresh and a graph with defaults applied are the same chain.
+  let masterState = normalizeMaster();
 
   const channelState = Object.fromEntries(TRACK_KEYS.map((track) => [track, {
     vol: DEFAULT_TRACK_VOLUME_DB,
@@ -1873,6 +1917,15 @@ export function createAudio(song) {
       }
       return { peak: Tone.gainToDb(peak), rms: Tone.gainToDb(Math.sqrt(sum / buf.length)) };
     },
+    // --- the master bus, editable like a track device ---
+    master() {
+      return { ...masterState };
+    },
+    setMaster(partial) {
+      masterState = normalizeMaster({ ...masterState, ...partial });
+      applyMasterTo(live, masterState, { ramp: true, at: tapTime() });
+      return { ...masterState };
+    },
     // --- devices: patches ---
     patch(track) {
       return { ...patches[track] };
@@ -2002,6 +2055,7 @@ export function createAudio(song) {
       const barSec = 240 / song.tempo;
       const runPass = (dur, stopStep, barOf) => {
         const patchesCopy = structuredClone(patches);
+        const masterCopy = { ...masterState };
         return Tone.Offline(({ transport: offTr }) => {
           offTr.bpm.value = song.tempo;
           // Which returns does this pass need? Only sends on AUDIBLE tracks
@@ -2018,6 +2072,7 @@ export function createAudio(song) {
             withEcho: TRACK_KEYS.some((k) => audible(k) && sendGain(channelState[k].echo) > 0),
           });
           for (const t of TRACK_KEYS) applyPatchTo(g, t, patchesCopy[t]);
+          applyMasterTo(g, masterCopy); // the export hears the same bus moves
           const anySolo = TRACK_KEYS.some((track) => channelState[track].solo);
           for (const k of TRACK_KEYS) {
             const st = channelState[k];

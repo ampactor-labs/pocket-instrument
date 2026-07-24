@@ -1251,9 +1251,17 @@
         outline: 2px solid color-mix(in srgb, var(--tc) 75%, #fff);
         outline-offset: -2px;
       }
+      /* Wide enough that "Master" fits (36px clipped it mid-word), centered
+         with no dot — and the whole strip is a button into the bus editor. */
       .mx-master {
         background: #202022;
-        flex: 0 0 36px;
+        flex: 0 0 50px;
+        cursor: pointer;
+      }
+      .mx-master .mx-name {
+        justify-content: center;
+        font-size: 10px;
+        letter-spacing: 0.2px;
       }
       .mx-dot {
         width: 8px;
@@ -1398,12 +1406,6 @@
         display: flex;
         flex-direction: column;
         gap: 3px;
-      }
-      .mx-devlabel {
-        font-size: 9px;
-        font-weight: 700;
-        color: var(--dim);
-        text-transform: uppercase;
       }
       .mx-preset {
         width: 100%;

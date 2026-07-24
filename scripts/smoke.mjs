@@ -334,13 +334,24 @@ try {
   const mixerText = await page.$eval("#sheet", (el) => el.textContent);
   assertState(mixerText.includes("echo"), "mixer missing echo send");
   assertState(mixerText.includes("Master") && mixerText.includes("-6 dB"), "mixer missing master/default level");
-  // The strip's device label names the engine's dominant corner (the preset
-  // dropdowns are gone; the sound sheet is the one path).
-  const kitMatch = await page.evaluate(() => {
-    const label = document.querySelector('.mx-strip[data-track="drums"] .mx-devlabel')?.textContent || "";
-    return { label, engine: window.__noodles.audio.kit() };
+  // The master strip is a door: tapping it opens the mix bus editor, whose
+  // knobs drive audio.setMaster and ride project save/load.
+  await tap(page, '.mx-strip[data-track="master"]');
+  await page.waitForFunction(() => document.querySelector(".sheet-bar .title")?.textContent === "Master");
+  for (const knobName of ["level", "juice", "weight", "glue"]) {
+    const present = await page.$(`[data-action="master-${knobName}"]`);
+    assertState(!!present, `master sheet missing ${knobName} knob`);
+  }
+  const masterRound = await page.evaluate(() => {
+    const a = window.__noodles.audio;
+    a.setMaster({ juice: 0.8, level: -3 });
+    const echoed = a.master();
+    a.setMaster({ juice: 0.5, level: 0 });
+    return echoed;
   });
-  assertState(kitMatch.label.includes(kitMatch.engine), `mixer device label (${kitMatch.label}) disagrees with engine (${kitMatch.engine})`);
+  assertState(Math.abs(masterRound.juice - 0.8) < 1e-6 && masterRound.level === -3, `setMaster did not echo (${JSON.stringify(masterRound)})`);
+  await tap(page, ".arr-corner .view-mix");
+  await page.waitForFunction(() => document.querySelector(".sheet-bar .title")?.textContent === "Mixer");
   await tap(page, ".tbtn.play");
   const mixerStillOpen = await page.$eval("#sheet", (el) => el.classList.contains("open"));
   assertState(mixerStillOpen, "play/pause dismissed an open sheet");
