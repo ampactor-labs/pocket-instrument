@@ -343,7 +343,7 @@ function renderFooter() {
   // The dice sits with the song's musical identity: one tap rolls a whole new
   // key + tempo + sounds + magic scene, same as a fresh load. Undo-safe.
   const diceBtn = el("div", { class: "tbtn accent", text: "🎲", id: "dice-btn", title: "New song: random key, tempo, sounds", onclick: rerollSong });
-  const aboutBtn = el("div", { class: "tbtn", text: "?", id: "about-btn", title: "What is this?", onclick: openAboutSheet });
+  const aboutBtn = el("div", { class: "tbtn", text: "?", id: "about-btn", title: "What is this?", "data-sheet": "about", onclick: openAboutSheet });
   footer.append(
     el("div", { class: "frow" }, [keyctl, diceBtn, aboutBtn, groove])
   );
@@ -355,6 +355,7 @@ function renderFooter() {
 // ---------------------------------------------------------------------------
 function openAboutSheet() {
   resetSheet("#e8b84b");
+  sheetId = "about";
   sheet.appendChild(sheetBar("noodles", "a pocket instrument"));
   const p = (text) => el("div", { class: "about-p", text });
   const label = (text) => el("div", { class: "about-label", text });
@@ -557,6 +558,7 @@ function openAddSceneSheet() {
 
 
 function setView(v) {
+  if (v === view) return;
   view = v;
   document.getElementById("app").classList.toggle("arrange", v === "arrangement");
   if (v === "arrangement") {
@@ -958,6 +960,7 @@ function renderSession() {
       class: "head track-head",
       style: `--tc:${t.color}`,
       "data-track": t.key,
+      "data-sheet": `sound:${t.key}`,
     }, [
       el("div", { class: "head-name", text: t.name }),
       el("div", { class: "head-ms" }, [trackToggleButton(t.key, "mute"), trackToggleButton(t.key, "solo")]),
@@ -1134,12 +1137,32 @@ const sheet = document.getElementById("sheet");
 const scrim = document.getElementById("scrim");
 let editor = null; // { scene, track, stepEls, cursor }
 let suppressOutsideClick = false;
+// Which view the open sheet IS (mixer / sound:<track> / master / about),
+// set by the openers, so a button targeting the already-open view can be a
+// true no-op. Without it the outside-tap close below fired on the button's
+// pointerdown and its click reopened the same sheet — a full close+reopen
+// animation for a tap that should change nothing.
+let sheetId = null;
 
 scrim.addEventListener("click", closeEditor);
 document.addEventListener("pointerdown", (e) => {
   if (!sheet.classList.contains("open")) return;
   if (sheet.contains(e.target)) return;
   if (e.target.closest(".tbtn.play")) return;
+
+  // The button for the view that is already open is a no-op, not a
+  // close-then-reopen. The scrim sits over every view button (only the
+  // transport rides above it), so the tap's target is the scrim itself —
+  // hit-test under the point for the button the finger was aiming at, and
+  // when it names the open sheet, swallow the tap: no close, and the
+  // click-suppressor below eats the scrim's own close-click.
+  const opener = e.target === scrim
+    ? document.elementsFromPoint(e.clientX, e.clientY).find((n) => n.dataset?.sheet)
+    : e.target.closest("[data-sheet]");
+  if (opener && !e.target.closest("[data-track-toggle]") && sheetId && opener.dataset.sheet === sheetId) {
+    suppressOutsideClick = true;
+    return;
+  }
 
   closeEditor();
   if (e.target.closest("#transport")) {
@@ -1176,6 +1199,7 @@ function openEditor(sceneIndex, track) {
 
 function closeEditor() {
   editor = null;
+  sheetId = null;
   cancelAnimationFrame(mixerRAF);
   mixerRAF = 0;
   audio.setMetersActive(false); // park the analyser taps with the meter loop
@@ -1189,6 +1213,7 @@ function closeEditor() {
 // opener can forget one.
 function resetSheet(color) {
   editor = null;
+  sheetId = null;
   cancelAnimationFrame(mixerRAF);
   mixerRAF = 0;
   audio.setMetersActive(false); // park the analyser taps with the meter loop
@@ -1508,6 +1533,7 @@ function viewMixButton() {
   return el("div", {
     class: "view-mix",
     text: "Mix",
+    "data-sheet": "mixer",
     onclick: (e) => {
       e.stopPropagation();
       openMixer();
@@ -1645,6 +1671,7 @@ function openTrackOptions(track) {
 
 function openMixer(focusTrack = null) {
   resetSheet("#8a8a90");
+  sheetId = "mixer";
   sheet.appendChild(
     sheetBar("Mixer", "levels · sends · devices", {
       buttons: [el("div", { class: "close", style: "font-size:11px;padding:5px 7px", text: "Reset", onclick: () => { resetAllMix(); openMixer(focusTrack); } })],
@@ -1754,6 +1781,7 @@ function openMixer(focusTrack = null) {
 // ---------------------------------------------------------------------------
 function openMasterSheet() {
   resetSheet("#d2d2d4");
+  sheetId = "master";
   sheet.appendChild(sheetBar("Master", "the mix bus"));
   const body = el("div", { class: "editor-scroll" });
   sheet.appendChild(body);
@@ -1800,6 +1828,7 @@ function openMasterSheet() {
 function openSoundSheet(track) {
   const meta = TRACKS.find((t) => t.key === track);
   resetSheet(meta.color);
+  sheetId = `sound:${track}`;
   // Motion capture: arm ●, play, and perform on the pad — the ride is written
   // into the playing scene's lanes, quantized to 16ths, and loops from then on.
   const recBtn = el("div", {
@@ -2679,7 +2708,7 @@ function ensureArrShell() {
   const headers = el("div", { class: "arr-headers" }, [el("div", { class: "arr-corner" }, [viewMixButton()])]);
   for (const t of ARRANGE_TRACKS) {
     const meta = TRACKS.find((x) => x.key === t);
-    const head = el("div", { class: "arr-thead track-head", style: `--tc:${meta.color}`, "data-track": t }, [
+    const head = el("div", { class: "arr-thead track-head", style: `--tc:${meta.color}`, "data-track": t, "data-sheet": `sound:${t}` }, [
         el("div", { class: "dot" }),
         el("div", { class: "nm", text: meta.name }),
         el("div", { class: "ms" }, [trackToggleButton(t, "mute"), trackToggleButton(t, "solo")]),
