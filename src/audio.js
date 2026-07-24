@@ -587,9 +587,20 @@ function buildGraph({ meters = false, exportGrade = false, withVerb = true, with
   // which is the loudness-war artifact, not the sound of a saturator. Now the
   // saturator is driven on purpose and the ceiling is left alone to be a
   // ceiling.
-  const SAT_WET = 0.42;
-  const SAT_DRIVE_DB = 12;
-  const SAT_ASYM = 0.35;
+  // Wet 0.42 → 0.50, drive 12 → 14, asym 0.35 → 0.40 (2026-07): the headroom
+  // reclaimed by retiring the per-track tape color, spent here as character.
+  // All three are level-neutral by construction — the drive comes back off
+  // after the blend and the curve's origin slope stays unity for any asym —
+  // so this buys harmonics, not loudness. The split matters: at program level
+  // the tanh is already deep in saturation, so more DRIVE only enriches quiet
+  // passages; the WET ratio is what scales the shaped path at every level.
+  // Measured against the 0.42/12/0.35 chain (npm run audit): 2H +4.2 dB at
+  // -24 dBFS and +3.0 at -18, 4H/5H +2..3 dB at -12; LUFS -10.72 -> -10.80,
+  // small-signal gain 15.51 both sides, worst dice true peak -0.27 dBTP.
+  // Re-measure after touching any of these.
+  const SAT_WET = 0.5;
+  const SAT_DRIVE_DB = 14;
+  const SAT_ASYM = 0.4;
   g.satTrim = new Tone.Gain(Tone.dbToGain(-SAT_DRIVE_DB)).connect(g.softClip);
   // The DC block sits AFTER the saturation, and that placement is the whole
   // point of it. The asymmetric curve rectifies: it puts a signal-dependent DC
